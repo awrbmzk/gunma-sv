@@ -120,6 +120,29 @@
   .fab.on { background: var(--verm); color: #fff; border-color: var(--verm); }
   .fab.loc.on { background: var(--ai); border-color: var(--ai); }
 
+  #rectbox {
+    position: fixed;
+    border: 2px dashed var(--verm);
+    background: rgba(184, 70, 44, .12);
+    pointer-events: none;
+    z-index: 9;
+  }
+
+  #rectbox b {
+    position: absolute;
+    left: 0;
+    top: -26px;
+    background: var(--verm);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .rectmode #map { cursor: crosshair; touch-action: none; }
+
   /* ---- 選択した道の操作バー ---- */
   .action {
     position: absolute;
@@ -306,8 +329,11 @@
 
 <div class="fabs" id="fabs" hidden>
   <div class="fab loc" id="btnLoc" title="現在地">➤</div>
+  <div class="fab" id="btnRect" title="四角く囲って消す">▭</div>
   <div class="fab" id="btnEraser" title="消しゴムモード">✕</div>
 </div>
+
+<div id="rectbox" hidden><b id="rectn"></b></div>
 
 <div class="legend" id="legend" hidden>
   <span><i style="background:#b8462c"></i>0%</span>
@@ -548,6 +574,7 @@
 
     setupDoubleTapZoom();
     setupSheetSwipe();
+    setupRectSelect();
 
     ["gate"].forEach(function (id) { $(id).hidden = true; });
     ["topbar", "fabs", "legend", "sheet"].forEach(function (id) { $(id).hidden = false; });
@@ -576,9 +603,11 @@
     });
     $("svchk").addEventListener("change", function () { setSvLayer(this.checked); });
     $("btnLoc").addEventListener("click", toggleFollow);
+    $("btnRect").addEventListener("click", function () { setRectMode(!rectMode); });
     $("btnEraser").addEventListener("click", function () {
       eraser = !eraser;
       this.classList.toggle("on", eraser);
+      if (eraser && rectMode) setRectMode(false);
     });
     $("aClose").addEventListener("click", function () { sel = null; $("action").hidden = true; });
     $("aDone").addEventListener("click", function () {
@@ -788,9 +817,11 @@
   // ---------- 記録（id → 時刻。正=行った、負=戻した） ----------
   function isDone(id) { return done[id] > 0; }
 
+  // 「消した本数」は読み込んである道の本数で数える（残り＋消＝総数 になるように）
   function countDone() {
     var n = 0;
-    for (var k in done) if (done[k] > 0) n++;
+    if (!roads.length) { for (var k in done) if (done[k] > 0) n++; return n; }
+    for (var i = 0; i < roads.length; i++) if (done[roads[i].id] > 0) n++;
     return n;
   }
 
@@ -1172,6 +1203,122 @@
     $("aDone").textContent = d ? "消したのを戻す" : "行った（消す）";
     $("aDone").className = "bigbtn" + (d ? " undoish" : "");
     $("action").hidden = false;
+  }
+
+  // ---------- ドラッグで四角く囲って消す ----------
+  var rectMode = false;
+
+  function setRectMode(on) {
+    rectMode = on;
+    $("btnRect").classList.toggle("on", on);
+    document.body.classList.toggle("rectmode", on);
+    if (map) map.setOptions({ draggable: !on });
+    if (!on) $("rectbox").hidden = true;
+    if (on && eraser) {   // 消しゴムモードとは同時に使わない
+      eraser = false;
+      $("btnEraser").classList.remove("on");
+    }
+  }
+
+  // 画面上の座標 → 緯度経度
+  function pointToLatLng(x, y) {
+    var proj = map.getProjection();
+    if (!proj) return null;
+    var r = $("map").getBoundingClientRect();
+    var scale = Math.pow(2, map.getZoom());
+    var cw = proj.fromLatLngToPoint(map.getCenter());
+    return proj.fromPointToLatLng(new google.maps.Point(
+      cw.x + (x - r.left - r.width / 2) / scale,
+      cw.y + (y - r.top - r.height / 2) / scale));
+  }
+
+  function roadsInBox(s, w, n, e) {
+    var on = bands(), minLen = Number($("flen").value), ctg = $("fctg").value, mi = $("fmuni").value;
+    var out = [], seen = {};
+    for (var y = Math.floor(s / GS); y <= Math.floor(n / GS); y++) {
+      for (var x = Math.floor(w / GS); x <= Math.floor(e / GS); x++) {
+        var cell = grid[y + ":" + x];
+        if (!cell) continue;
+        for (var i = 0; i < cell.length; i++) {
+          var idx = cell[i];
+          if (seen[idx]) continue;
+          seen[idx] = 1;
+          var o = roads[idx];
+          if (o.b[0] > n || o.b[2] < s || o.b[1] > e || o.b[3] < w) continue;
+          if (isDone(o.id)) continue;
+          if (!passes(o, on, minLen, ctg, mi)) continue;
+          for (var k = 0; k < o.pts.length; k++) {      // 1点でも枠の中に入っていれば対象
+            var p = o.pts[k];
+            if (p[1] >= s && p[1] <= n && p[0] >= w && p[0] <= e) { out.push(o); break; }
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  function setupRectSelect() {
+    var el = $("map"), box = $("rectbox");
+    var x0 = 0, y0 = 0, drawing = false;
+
+    function geom(x1, y1) {
+      return { l: Math.min(x0, x1), t: Math.min(y0, y1),
+               w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
+    }
+
+    function down(e) {
+      if (!rectMode || e.button > 0) return;
+      drawing = true;
+      x0 = e.clientX; y0 = e.clientY;
+      box.hidden = false;
+      box.style.left = x0 + "px"; box.style.top = y0 + "px";
+      box.style.width = "0px"; box.style.height = "0px";
+      $("rectn").textContent = "";
+      el.setPointerCapture && e.pointerId !== undefined && el.setPointerCapture(e.pointerId);
+      e.preventDefault(); e.stopPropagation();
+    }
+
+    function move(e) {
+      if (!drawing) return;
+      var g = geom(e.clientX, e.clientY);
+      box.style.left = g.l + "px"; box.style.top = g.t + "px";
+      box.style.width = g.w + "px"; box.style.height = g.h + "px";
+      if (g.w > 20 && g.h > 20) {
+        var a = pointToLatLng(g.l, g.t), b2 = pointToLatLng(g.l + g.w, g.t + g.h);
+        if (a && b2) {
+          var n = roadsInBox(Math.min(a.lat(), b2.lat()), Math.min(a.lng(), b2.lng()),
+                             Math.max(a.lat(), b2.lat()), Math.max(a.lng(), b2.lng())).length;
+          $("rectn").textContent = num(n) + " 本";
+        }
+      }
+      e.preventDefault(); e.stopPropagation();
+    }
+
+    function up(e) {
+      if (!drawing) return;
+      drawing = false;
+      box.hidden = true;
+      var g = geom(e.clientX, e.clientY);
+      e.preventDefault(); e.stopPropagation();
+      if (g.w < 12 || g.h < 12) return;          // 小さすぎる＝ただのクリック
+      var a = pointToLatLng(g.l, g.t), b2 = pointToLatLng(g.l + g.w, g.t + g.h);
+      if (!a || !b2) return;
+      var hit = roadsInBox(Math.min(a.lat(), b2.lat()), Math.min(a.lng(), b2.lng()),
+                           Math.max(a.lat(), b2.lat()), Math.max(a.lng(), b2.lng()));
+      if (!hit.length) { alert("囲った範囲に消せる道がありません。"); return; }
+      var km = hit.reduce(function (t, o) { return t + o.len; }, 0) / 1000;
+      if (confirm("囲った範囲の " + num(hit.length) + " 本（" + km.toFixed(1) + " km）を消します。よろしいですか？\n（「取り消し」で戻せます）")) {
+        mark(hit.map(function (o) { return o.id; }), true);
+      }
+    }
+
+    el.addEventListener("pointerdown", down, true);
+    el.addEventListener("pointermove", move, true);
+    el.addEventListener("pointerup", up, true);
+    el.addEventListener("pointercancel", function () { drawing = false; box.hidden = true; }, true);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && rectMode) setRectMode(false);
+    });
   }
 
   // ---------- 現在地 ----------
