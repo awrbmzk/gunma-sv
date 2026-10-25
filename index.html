@@ -361,8 +361,11 @@
       <div class="btnrow">
         <button class="bigbtn undoish" id="btnUndo">取り消し</button>
       </div>
+      <h3 style="margin-top:20px">PCと同期</h3>
+      <div id="syncBox"></div>
+
       <h3 style="margin-top:20px">バックアップ</h3>
-      <p class="note" style="margin-top:0">記録はこの端末（Safari）に保存されます。PCとは別々なので、行き来するときは書き出して読み込んでください。</p>
+      <p class="note" style="margin-top:0">同期を使わない場合、記録はこの端末だけに残ります。書き出したファイルを他の端末で読み込めば引き継げます。</p>
       <div class="btnrow">
         <button class="bigbtn ghost" id="btnExp">書き出す</button>
         <button class="bigbtn ghost" id="btnImp">読み込む</button>
@@ -389,7 +392,7 @@
 <script>
 (function () {
   "use strict";
-  var KKEY = "sv-key", DKEY = "sv-done-v1", SVKEY = "sv-layer-on", HEAVY = "sv-load-heavy", VKEY = "sv-view";
+  var KKEY = "sv-key", DKEY = "sv-done-v1", SVKEY = "sv-layer-on", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
   var DATA_URL = "gunma_sv_mobile.json";
   var map, svLayer, meMarker, meCircle, sel = null;
   var roads = [], grid = {}, GS = 0.02;
@@ -521,6 +524,7 @@
 
   function init() {
     loadDone();
+    loadSync();
     var v = (lsGet(VKEY) || "").split(",");
     var c0 = (v.length === 3 && isFinite(v[0])) ? { lat: +v[0], lng: +v[1] } : { lat: 36.39, lng: 139.06 };
     var z0 = (v.length === 3 && isFinite(v[2])) ? +v[2] : 11;
@@ -579,7 +583,7 @@
     $("aClose").addEventListener("click", function () { sel = null; $("action").hidden = true; });
     $("aDone").addEventListener("click", function () {
       if (!sel) return;
-      mark([sel.id], !done[sel.id]);
+      mark([sel.id], !isDone(sel.id));
       $("action").hidden = true;
       sel = null;
     });
@@ -621,7 +625,7 @@
       if (b) map.fitBounds(new google.maps.LatLngBounds({ lat: b[0], lng: b[1] }, { lat: b[2], lng: b[3] }));
     });
     $("btnScreen").addEventListener("click", function () {
-      var ids = inView.filter(function (o) { return !done[o.id]; }).map(function (o) { return o.id; });
+      var ids = inView.filter(function (o) { return !isDone(o.id); }).map(function (o) { return o.id; });
       if (!ids.length) { alert("画面内に消せる道がありません。"); return; }
       if (confirm("画面内の " + num(ids.length) + " 本を消します。よろしいですか？")) mark(ids, true);
     });
@@ -630,6 +634,8 @@
     $("btnImp").addEventListener("click", function () { $("impFile").click(); });
     $("impFile").addEventListener("change", importDone);
 
+    renderSyncUI();
+    syncStart();
     refresh();
   }
 
@@ -771,49 +777,67 @@
       arr.map(function (v, i) { return '<option value="' + i + '">' + esc(v) + "</option>"; }).join("");
   }
 
-  // ---------- 記録 ----------
+  // ---------- 記録（id → 時刻。正=行った、負=戻した） ----------
+  function isDone(id) { return done[id] > 0; }
+
+  function countDone() {
+    var n = 0;
+    for (var k in done) if (done[k] > 0) n++;
+    return n;
+  }
+
   function loadDone() {
-    done = {}; doneN = 0;
-    var raw = lsGet(DKEY);
-    if (raw) raw.split("\n").forEach(function (id) { if (id) { done[id] = 1; doneN++; } });
+    done = {};
+    var raw = lsGet(MKEY);
+    if (raw) { try { done = JSON.parse(raw) || {}; } catch (e) { done = {}; } }
+    else {
+      var old = lsGet(DKEY);   // 旧形式からの引き継ぎ
+      if (old) old.split("\n").forEach(function (id) { if (id) done[id] = 1; });
+    }
+    doneN = countDone();
   }
 
   var st = null;
   function saveDone() {
     clearTimeout(st);
     st = setTimeout(function () {
-      if (!lsSet(DKEY, Object.keys(done).join("\n"))) {
+      if (!lsSet(MKEY, JSON.stringify(done))) {
         $("progNote").innerHTML = '<span class="warn">保存できませんでした。書き出してバックアップしてください。</span>';
       }
     }, 350);
   }
 
   function mark(ids, v) {
-    var ch = [];
+    var ch = [], t = Date.now(), patch = {};
     ids.forEach(function (id) {
-      if (v && !done[id]) { done[id] = 1; doneN++; ch.push(id); }
-      else if (!v && done[id]) { delete done[id]; doneN--; ch.push(id); }
+      if (v === isDone(id)) return;
+      done[id] = v ? t : -t;
+      patch[id] = done[id];
+      ch.push(id);
     });
     if (!ch.length) return;
+    doneN = countDone();
     undoStack.push({ ids: ch, v: v });
     if (undoStack.length > 30) undoStack.shift();
     saveDone();
+    syncPush();
     refresh();
   }
 
   function undo() {
     var l = undoStack.pop();
     if (!l) { alert("戻せる操作がありません。"); return; }
-    l.ids.forEach(function (id) {
-      if (l.v) { delete done[id]; doneN--; } else { done[id] = 1; doneN++; }
-    });
+    var t = Date.now(), patch = {};
+    l.ids.forEach(function (id) { done[id] = l.v ? -t : t; patch[id] = done[id]; });
+    doneN = countDone();
     saveDone();
+    syncPush();
     refresh();
   }
 
   function exportDone() {
-    var blob = new Blob([JSON.stringify({ app: "gunma-sv-done", v: 1, savedAt: new Date().toISOString(), ids: Object.keys(done) })],
-      { type: "application/json" });
+    var blob = new Blob([JSON.stringify({ app: "gunma-sv-done", v: 2, savedAt: new Date().toISOString(),
+      marks: done, ids: Object.keys(done).filter(isDone) })], { type: "application/json" });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "sv-done.json";
@@ -828,15 +852,220 @@
     var fr = new FileReader();
     fr.onload = function () {
       try {
-        var ids = (JSON.parse(fr.result).ids) || [];
-        var add = ids.filter(function (id) { return !done[id]; });
-        mark(add, true);
-        $("progNote").textContent = num(add.length) + " 本を追加しました（合計 " + num(doneN) + " 本）。";
+        var j = JSON.parse(fr.result);
+        var before = doneN;
+        if (j.marks) { mergeMarks(j.marks); saveDone(); syncPush(); refresh(); }
+        else { mark((j.ids || []).filter(function (id) { return !isDone(id); }), true); }
+        $("progNote").textContent = num(Math.max(0, doneN - before)) + " 本を追加しました（合計 " + num(doneN) + " 本）。";
       } catch (e) { $("progNote").innerHTML = '<span class="warn">読み込めませんでした。</span>'; }
     };
     fr.readAsText(f);
     this.value = "";
   }
+
+  // 同じidは「新しい時刻のほう」を採用して混ぜる
+  function mergeMarks(remote) {
+    var changed = 0;
+    for (var id in remote) {
+      var r = remote[id], l = done[id];
+      if (l === undefined || Math.abs(r) > Math.abs(l)) { done[id] = r; changed++; }
+    }
+    if (changed) doneN = countDone();
+    return changed;
+  }
+
+  // ---------- 端末間の同期（GitHubのGistに保存） ----------
+  var sync = null, pushTimer = null, pollTimer = null, syncing = false, dirty = false;
+  var GFILE = "sv-done.json";
+
+  function loadSync() {
+    var q = /[?&]sync=([^&]+)/.exec(location.search);
+    if (q) {
+      try {
+        var cfg = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(q[1])))));
+        if (cfg.t && cfg.g) lsSet(SKEY, JSON.stringify(cfg));
+      } catch (e) { /* 壊れたリンクは無視 */ }
+      if (history.replaceState) history.replaceState(null, "", location.pathname);
+    }
+    var raw = lsGet(SKEY);
+    if (raw) { try { sync = JSON.parse(raw); } catch (e) { sync = null; } }
+  }
+
+  function syncStatus(txt, bad) {
+    var el = $("syncState");
+    if (el) el.innerHTML = bad ? '<span class="warn">' + esc(txt) + "</span>" : esc(txt);
+  }
+
+  function nowHM() {
+    return new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function ghHeaders() {
+    return { "Authorization": "Bearer " + sync.t, "Accept": "application/vnd.github+json",
+             "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" };
+  }
+
+  function toB64(bytes) {
+    var s = "", CH = 0x8000;
+    for (var i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    return btoa(s);
+  }
+
+  function fromB64(str) {
+    var bin = atob(str.replace(/\s/g, ""));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // 件数が増えても軽いよう、使えるブラウザでは圧縮して置く
+  function encodeMarks() {
+    var s = JSON.stringify({ v: 2, updated: new Date().toISOString(), marks: done });
+    if (!window.CompressionStream) return Promise.resolve(s);
+    return new Response(new Blob([s]).stream().pipeThrough(new CompressionStream("gzip")))
+      .arrayBuffer().then(function (buf) { return "GZ1:" + toB64(new Uint8Array(buf)); });
+  }
+
+  function decodeMarks(text) {
+    if (text.slice(0, 4) !== "GZ1:") return Promise.resolve(JSON.parse(text));
+    if (!window.DecompressionStream) return Promise.reject(new Error("このブラウザでは展開できません"));
+    var bytes = fromB64(text.slice(4));
+    return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")))
+      .text().then(function (t) { return JSON.parse(t); });
+  }
+
+  function createGist() {
+    syncStatus("保存場所を作成中…");
+    return encodeMarks().then(function (content) {
+      var files = {};
+      files[GFILE] = { content: content };
+      return fetch("https://api.github.com/gists", { method: "POST", headers: ghHeaders(),
+        body: JSON.stringify({ description: "群馬SV空白マップ 進捗", public: false, files: files }) });
+    }).then(function (r) {
+      if (r.status === 401 || r.status === 403) throw new Error("トークンが拒否されました（" + r.status + "）。Gistsの書き込み権限を確認してください");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (j) {
+      sync.g = j.id;
+      lsSet(SKEY, JSON.stringify(sync));
+      dirty = false;
+      syncStatus("保存しました " + nowHM());
+      renderSyncUI();
+      syncStart();
+    }).catch(function (e) { syncStatus(String(e && e.message || e), true); });
+  }
+
+  function syncPull(quiet) {
+    if (!sync || !sync.g || syncing) return Promise.resolve(0);
+    syncing = true;
+    if (!quiet) syncStatus("同期中…");
+    return fetch("https://api.github.com/gists/" + sync.g + "?t=" + Date.now(),
+      { headers: ghHeaders(), cache: "no-store" })
+      .then(function (r) {
+        if (r.status === 404) throw new Error("保存場所が見つかりません（削除された可能性）");
+        if (r.status === 401 || r.status === 403) throw new Error("トークンが拒否されました（" + r.status + "）");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        var f = j.files && j.files[GFILE];
+        if (!f) { syncStatus("保存場所は空です（" + nowHM() + "）"); return 0; }
+        var get = f.truncated && f.raw_url
+          ? fetch(f.raw_url, { headers: { "Authorization": "Bearer " + sync.t } }).then(function (r) { return r.text(); })
+          : Promise.resolve(f.content);
+        return get.then(decodeMarks).then(function (obj) {
+          var ch = obj && obj.marks ? mergeMarks(obj.marks) : 0;
+          if (ch) { saveDone(); afterSync(); }
+          syncStatus("最終同期 " + nowHM() + (ch ? "（" + num(ch) + "件 受信）" : ""));
+          return ch;
+        });
+      })
+      .catch(function (e) { syncStatus(String(e && e.message || e), true); return 0; })
+      .then(function (n) { syncing = false; return n; });
+  }
+
+  function syncPush() {
+    if (!sync) return;
+    dirty = true;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(doPush, 3000);
+  }
+
+  function doPush() {
+    if (!sync || !sync.g || !dirty) return;
+    syncStatus("保存中…");
+    syncPull(true).then(encodeMarks).then(function (content) {   // 相手の変更を取り込んでから書き戻す
+      var files = {};
+      files[GFILE] = { content: content };
+      return fetch("https://api.github.com/gists/" + sync.g,
+        { method: "PATCH", headers: ghHeaders(), body: JSON.stringify({ files: files }) });
+    }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      dirty = false;
+      syncStatus("保存しました " + nowHM());
+    }).catch(function (e) { syncStatus(String(e && e.message || e), true); });
+  }
+
+  function syncStart() {
+    if (!sync || !sync.g) return;
+    syncPull();
+    clearInterval(pollTimer);
+    pollTimer = setInterval(function () {
+      if (document.visibilityState === "visible" && !dirty) syncPull(true);
+    }, 60000);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible" && !dirty) syncPull(true);
+    });
+    window.addEventListener("beforeunload", function () {
+      if (dirty) { clearTimeout(pushTimer); doPush(); }
+    });
+  }
+
+  function renderSyncUI() {
+    var box = $("syncBox");
+    if (!box) return;
+    var inp = 'style="width:100%;font:inherit;font-size:15px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:9px 10px;margin-top:4px"';
+    if (!sync || !sync.g) {
+      box.innerHTML =
+        '<p class="note" style="margin-top:0">GitHubの「Gist」に記録を置いて、PCとスマホで共有します。必要なのはトークン1つだけです。</p>' +
+        '<label class="f">GitHubのアクセストークン</label>' +
+        '<input id="ghT" type="password" ' + inp + ' placeholder="github_pat_…" autocapitalize="off" autocomplete="off">' +
+        '<div class="btnrow"><button class="bigbtn" id="syncOn">同期を始める</button></div>' +
+        '<div id="syncState" style="font-size:13px;margin-top:8px"></div>' +
+        '<p class="note">2台目は、1台目で作る「同期リンク」を開くだけです。</p>';
+      $("syncOn").addEventListener("click", function () {
+        var t = ($("ghT").value || "").trim();
+        if (!t) { alert("トークンを入力してください。"); return; }
+        sync = { t: t, g: "" };
+        createGist();
+      });
+      return;
+    }
+    box.innerHTML =
+      '<div style="font-size:13.5px">状態：<span id="syncState">接続中…</span></div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-top:4px;word-break:break-all">Gist: ' + esc(sync.g) + "</div>" +
+      '<div class="btnrow"><button class="bigbtn ghost" id="syncLink">同期リンクをコピー</button>' +
+      '<button class="bigbtn ghost" id="syncNow">今すぐ同期</button></div>' +
+      '<div class="btnrow"><button class="bigbtn undoish" id="syncOff">同期を解除</button></div>' +
+      '<p class="note" id="syncNote">同期リンクにはトークンが入っています。他人に渡さないでください。</p>';
+    $("syncNow").addEventListener("click", function () { if (dirty) { clearTimeout(pushTimer); doPush(); } else syncPull(); });
+    $("syncLink").addEventListener("click", function () {
+      var url = location.origin + location.pathname + "?sync=" +
+        encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(sync)))));
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(function () { $("syncNote").textContent = "コピーしました。もう一方の端末で開いてください。"; });
+      } else { prompt("このURLをもう一方の端末で開いてください", url); }
+    });
+    $("syncOff").addEventListener("click", function () {
+      if (!confirm("この端末の同期を解除します。消した記録自体は残ります。")) return;
+      sync = null;
+      try { localStorage.removeItem(SKEY); } catch (e) { /* ignore */ }
+      clearInterval(pollTimer);
+      renderSyncUI();
+    });
+  }
+
+  function afterSync() { refresh(); }
 
   // ---------- 絞り込みと描画 ----------
   function bands() {
@@ -846,7 +1075,7 @@
   }
 
   function passes(o, on, minLen, ctg, mi) {
-    if (done[o.id] && !$("showdone").checked) return false;
+    if (isDone(o.id) && !$("showdone").checked) return false;
     if (!on[o.band]) return false;
     if (o.len < minLen) return false;
     if (ctg !== "" && o.ctg !== Number(ctg)) return false;
@@ -857,7 +1086,7 @@
   function refresh() {
     var dkm = 0, rest = 0;
     for (var i = 0; i < roads.length; i++) {
-      if (done[roads[i].id]) dkm += roads[i].len; else rest++;
+      if (isDone(roads[i].id)) dkm += roads[i].len; else rest++;
     }
     $("pRest").textContent = num(rest);
     $("pGone").textContent = num(doneN);
@@ -874,7 +1103,7 @@
       pl = new google.maps.Polyline({ clickable: true });
       pl.addListener("click", function () {
         if (!pl._o) return;
-        if (eraser) mark([pl._o.id], !done[pl._o.id]);
+        if (eraser) mark([pl._o.id], !isDone(pl._o.id));
         else select(pl._o);
       });
     }
@@ -911,7 +1140,7 @@
     drawn = [];
     var z = map.getZoom();
     hits.forEach(function (o) {
-      var pl = getLine(), dn = !!done[o.id];
+      var pl = getLine(), dn = isDone(o.id);
       pl._o = o;
       pl.setOptions({
         path: o.pts.map(function (c) { return { lat: c[1], lng: c[0] }; }),
@@ -927,7 +1156,7 @@
 
   function select(o) {
     sel = o;
-    var d = done[o.id];
+    var d = isDone(o.id);
     $("aTtl").textContent = (D.ctgs[o.ctg] || "道路").replace("市区町村道等", "市町村道") + "　" +
       (o.len >= 1000 ? (o.len / 1000).toFixed(1) + "km" : o.len + "m");
     $("aSub").textContent = o.ms.map(function (i) { return D.munis[i]; }).join("・") +
