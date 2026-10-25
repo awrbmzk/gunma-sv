@@ -283,6 +283,7 @@
     .sheet { left: auto; right: 0; top: 0; bottom: 0; width: 380px; max-height: none; border-radius: 0; border-left: 1px solid var(--line); transform: none !important; }
     .sheet.closed { transform: none; }
     .grip { display: none; }
+    .topbar { right: 400px; }
     .fabs { right: 400px; bottom: 30px; }
     .action { right: 400px; bottom: 30px; left: 20px; max-width: 420px; }
     .legend { bottom: 30px; }
@@ -349,6 +350,7 @@
       <label class="f">市町村</label>
       <select id="fmuni"></select>
       <label class="sw" style="margin-top:6px"><span>消した道も薄く表示</span><input type="checkbox" id="showdone"></label>
+      <label class="sw"><span>Googleの青い線（公式SVの範囲）</span><input type="checkbox" id="svchk"></label>
     </div>
   </div>
   <div class="pane" id="pProg" hidden>
@@ -535,7 +537,7 @@
       isFractionalZoomEnabled: true
     });
     svLayer = new google.maps.StreetViewCoverageLayer();
-    if (lsGet(SVKEY) !== "0") { svLayer.setMap(map); $("btnSv").classList.add("on"); }
+    setSvLayer(lsGet(SVKEY) !== "0");
 
     map.addListener("idle", function () {
       draw();
@@ -570,11 +572,9 @@
     });
 
     $("btnSv").addEventListener("click", function () {
-      var on = !this.classList.contains("on");
-      this.classList.toggle("on", on);
-      svLayer.setMap(on ? map : null);
-      lsSet(SVKEY, on ? "1" : "0");
+      setSvLayer(!this.classList.contains("on"));
     });
+    $("svchk").addEventListener("change", function () { setSvLayer(this.checked); });
     $("btnLoc").addEventListener("click", toggleFollow);
     $("btnEraser").addEventListener("click", function () {
       eraser = !eraser;
@@ -772,8 +772,16 @@
     });
   }
 
-  function fillSelect(id, arr, all) {
-    $(id).innerHTML = '<option value="">' + all + "</option>" +
+  // 青い線（公式SV範囲）のオン・オフ。上の◎ボタンと絞り込みのチェックの両方から切り替える
+  function setSvLayer(on) {
+    if (svLayer) svLayer.setMap(on ? map : null);
+    var b = $("btnSv"), c = $("svchk");
+    if (b) b.classList.toggle("on", on);
+    if (c) c.checked = on;
+    lsSet(SVKEY, on ? "1" : "0");
+  }
+
+  function fillSelect(id, arr, all) {    $(id).innerHTML = '<option value="">' + all + "</option>" +
       arr.map(function (v, i) { return '<option value="' + i + '">' + esc(v) + "</option>"; }).join("");
   }
 
