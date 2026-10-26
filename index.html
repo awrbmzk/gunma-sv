@@ -120,25 +120,34 @@
   .fab.on { background: var(--verm); color: #fff; border-color: var(--verm); }
   .fab.loc.on { background: var(--ai); border-color: var(--ai); }
 
-  #rectbox {
+  #lasso {
     position: fixed;
-    border: 2px dashed var(--verm);
-    background: rgba(184, 70, 44, .12);
+    inset: 0;
     pointer-events: none;
     z-index: 9;
   }
 
-  #rectbox b {
-    position: absolute;
-    left: 0;
-    top: -26px;
+  #lasso path {
+    fill: rgba(184, 70, 44, .13);
+    stroke: var(--verm);
+    stroke-width: 2.5;
+    stroke-dasharray: 7 5;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+
+  #lassoN {
+    position: fixed;
+    z-index: 10;
     background: var(--verm);
     color: #fff;
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 600;
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 999px;
     white-space: nowrap;
+    pointer-events: none;
+    transform: translate(-50%, -140%);
   }
 
   .rectmode #map { cursor: crosshair; touch-action: none; }
@@ -329,11 +338,12 @@
 
 <div class="fabs" id="fabs" hidden>
   <div class="fab loc" id="btnLoc" title="現在地">➤</div>
-  <div class="fab" id="btnRect" title="四角く囲って消す">▭</div>
+  <div class="fab" id="btnRect" title="なぞって囲って消す">➰</div>
   <div class="fab" id="btnEraser" title="消しゴムモード">✕</div>
 </div>
 
-<div id="rectbox" hidden><b id="rectn"></b></div>
+<svg id="lasso" hidden><path id="lassoPath" d=""></path></svg>
+<div id="lassoN" hidden></div>
 
 <div class="legend" id="legend" hidden>
   <span><i style="background:#b8462c"></i>0%</span>
@@ -1205,7 +1215,7 @@
     $("action").hidden = false;
   }
 
-  // ---------- ドラッグで四角く囲って消す ----------
+  // ---------- なぞって囲って消す（投げ縄） ----------
   var rectMode = false;
 
   function setRectMode(on) {
@@ -1213,8 +1223,8 @@
     $("btnRect").classList.toggle("on", on);
     document.body.classList.toggle("rectmode", on);
     if (map) map.setOptions({ draggable: !on });
-    if (!on) $("rectbox").hidden = true;
-    if (on && eraser) {   // 消しゴムモードとは同時に使わない
+    if (!on) { $("lasso").hidden = true; $("lassoN").hidden = true; }
+    if (on && eraser) {
       eraser = false;
       $("btnEraser").classList.remove("on");
     }
@@ -1232,7 +1242,24 @@
       cw.y + (y - r.top - r.height / 2) / scale));
   }
 
-  function roadsInBox(s, w, n, e) {
+  // 点が多角形の中にあるか（x=経度, y=緯度）
+  function inPoly(x, y, poly) {
+    var inside = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+
+  function roadsInPoly(poly, quick) {
+    var s = 90, w = 180, n = -90, e = -180;
+    poly.forEach(function (p) {
+      if (p[1] < s) s = p[1];
+      if (p[1] > n) n = p[1];
+      if (p[0] < w) w = p[0];
+      if (p[0] > e) e = p[0];
+    });
     var on = bands(), minLen = Number($("flen").value), ctg = $("fctg").value, mi = $("fmuni").value;
     var out = [], seen = {};
     for (var y = Math.floor(s / GS); y <= Math.floor(n / GS); y++) {
@@ -1247,9 +1274,13 @@
           if (o.b[0] > n || o.b[2] < s || o.b[1] > e || o.b[3] < w) continue;
           if (isDone(o.id)) continue;
           if (!passes(o, on, minLen, ctg, mi)) continue;
-          for (var k = 0; k < o.pts.length; k++) {      // 1点でも枠の中に入っていれば対象
-            var p = o.pts[k];
-            if (p[1] >= s && p[1] <= n && p[0] >= w && p[0] <= e) { out.push(o); break; }
+          if (quick) {
+            var m = o.pts[Math.floor(o.pts.length / 2)];
+            if (inPoly(m[0], m[1], poly)) out.push(o);
+          } else {
+            for (var k = 0; k < o.pts.length; k++) {   // 1点でも中に入っていれば対象
+              if (inPoly(o.pts[k][0], o.pts[k][1], poly)) { out.push(o); break; }
+            }
           }
         }
       }
@@ -1258,37 +1289,58 @@
   }
 
   function setupRectSelect() {
-    var el = $("map"), box = $("rectbox");
-    var x0 = 0, y0 = 0, drawing = false;
+    var el = $("map"), svg = $("lasso"), path = $("lassoPath"), lbl = $("lassoN");
+    var pts = [], drawing = false, tick = 0;
 
-    function geom(x1, y1) {
-      return { l: Math.min(x0, x1), t: Math.min(y0, y1),
-               w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
+    function toPoly(limit) {
+      var src = pts;
+      if (limit && pts.length > limit) {        // 判定用に間引く
+        src = [];
+        var step = pts.length / limit;
+        for (var i = 0; i < limit; i++) src.push(pts[Math.floor(i * step)]);
+        src.push(pts[pts.length - 1]);
+      }
+      var poly = [], ll;
+      for (var j = 0; j < src.length; j++) {
+        ll = pointToLatLng(src[j][0], src[j][1]);
+        if (ll) poly.push([ll.lng(), ll.lat()]);
+      }
+      return poly;
+    }
+
+    function render() {
+      var d = "M" + pts[0][0] + " " + pts[0][1];
+      for (var i = 1; i < pts.length; i++) d += "L" + pts[i][0] + " " + pts[i][1];
+      path.setAttribute("d", d + "Z");
     }
 
     function down(e) {
       if (!rectMode || e.button > 0) return;
       drawing = true;
-      x0 = e.clientX; y0 = e.clientY;
-      box.hidden = false;
-      box.style.left = x0 + "px"; box.style.top = y0 + "px";
-      box.style.width = "0px"; box.style.height = "0px";
-      $("rectn").textContent = "";
-      el.setPointerCapture && e.pointerId !== undefined && el.setPointerCapture(e.pointerId);
+      pts = [[e.clientX, e.clientY]];
+      svg.hidden = false;
+      lbl.hidden = true;
+      render();
+      if (el.setPointerCapture && e.pointerId !== undefined) el.setPointerCapture(e.pointerId);
       e.preventDefault(); e.stopPropagation();
     }
 
     function move(e) {
       if (!drawing) return;
-      var g = geom(e.clientX, e.clientY);
-      box.style.left = g.l + "px"; box.style.top = g.t + "px";
-      box.style.width = g.w + "px"; box.style.height = g.h + "px";
-      if (g.w > 20 && g.h > 20) {
-        var a = pointToLatLng(g.l, g.t), b2 = pointToLatLng(g.l + g.w, g.t + g.h);
-        if (a && b2) {
-          var n = roadsInBox(Math.min(a.lat(), b2.lat()), Math.min(a.lng(), b2.lng()),
-                             Math.max(a.lat(), b2.lat()), Math.max(a.lng(), b2.lng())).length;
-          $("rectn").textContent = num(n) + " 本";
+      var last = pts[pts.length - 1];
+      if (Math.abs(last[0] - e.clientX) > 2 || Math.abs(last[1] - e.clientY) > 2) {
+        pts.push([e.clientX, e.clientY]);
+        render();
+      }
+      var now = Date.now();
+      if (pts.length > 6 && now - tick > 150) {    // 本数の目安を出す（中心点だけで速く判定）
+        tick = now;
+        var poly = toPoly(50);
+        if (poly.length > 2) {
+          lbl.textContent = num(roadsInPoly(poly, true).length) + " 本くらい";
+          lbl.style.left = e.clientX + "px";
+          lbl.style.top = e.clientY + "px";
+          lbl.hidden = false;
         }
       }
       e.preventDefault(); e.stopPropagation();
@@ -1297,14 +1349,13 @@
     function up(e) {
       if (!drawing) return;
       drawing = false;
-      box.hidden = true;
-      var g = geom(e.clientX, e.clientY);
+      svg.hidden = true;
+      lbl.hidden = true;
       e.preventDefault(); e.stopPropagation();
-      if (g.w < 12 || g.h < 12) return;          // 小さすぎる＝ただのクリック
-      var a = pointToLatLng(g.l, g.t), b2 = pointToLatLng(g.l + g.w, g.t + g.h);
-      if (!a || !b2) return;
-      var hit = roadsInBox(Math.min(a.lat(), b2.lat()), Math.min(a.lng(), b2.lng()),
-                           Math.max(a.lat(), b2.lat()), Math.max(a.lng(), b2.lng()));
+      if (pts.length < 8) return;                 // ほぼ動いていない＝ただのクリック
+      var poly = toPoly(0);
+      if (poly.length < 3) return;
+      var hit = roadsInPoly(poly, false);
       if (!hit.length) { alert("囲った範囲に消せる道がありません。"); return; }
       var km = hit.reduce(function (t, o) { return t + o.len; }, 0) / 1000;
       if (confirm("囲った範囲の " + num(hit.length) + " 本（" + km.toFixed(1) + " km）を消します。よろしいですか？\n（「取り消し」で戻せます）")) {
@@ -1315,7 +1366,7 @@
     el.addEventListener("pointerdown", down, true);
     el.addEventListener("pointermove", move, true);
     el.addEventListener("pointerup", up, true);
-    el.addEventListener("pointercancel", function () { drawing = false; box.hidden = true; }, true);
+    el.addEventListener("pointercancel", function () { drawing = false; svg.hidden = true; lbl.hidden = true; }, true);
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && rectMode) setRectMode(false);
     });
