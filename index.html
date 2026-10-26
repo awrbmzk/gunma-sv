@@ -128,10 +128,12 @@
   }
 
   #lasso path {
-    fill: rgba(184, 70, 44, .13);
+    fill: rgba(184, 70, 44, .14);
     stroke: var(--verm);
-    stroke-width: 2.5;
-    stroke-dasharray: 7 5;
+    stroke-width: 3.5;
+    paint-order: stroke;
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, .9));
+    stroke-dasharray: 9 5;
     stroke-linejoin: round;
     stroke-linecap: round;
   }
@@ -338,11 +340,11 @@
 
 <div class="fabs" id="fabs" hidden>
   <div class="fab loc" id="btnLoc" title="現在地">➤</div>
-  <div class="fab" id="btnRect" title="なぞって囲って消す">➰</div>
+  <div class="fab" id="btnRect" title="なぞって囲って消す（マウスなら右ドラッグでも）">➰</div>
   <div class="fab" id="btnEraser" title="消しゴムモード">✕</div>
 </div>
 
-<svg id="lasso" hidden><path id="lassoPath" d=""></path></svg>
+<svg id="lasso" style="display:none"><path id="lassoPath" d=""></path></svg>
 <div id="lassoN" hidden></div>
 
 <div class="legend" id="legend" hidden>
@@ -396,6 +398,7 @@
       <div class="btnrow">
         <button class="bigbtn ghost" id="btnScreen">画面内をまとめて消す</button>
       </div>
+      <p class="note">マウスなら、地図の上を<b>右ドラッグでなぞる</b>とその範囲をまとめて消せます（左ドラッグは地図の移動）。指で操作するときは右下の ➰ ボタンを押してからなぞってください。</p>
       <div class="btnrow">
         <button class="bigbtn undoish" id="btnUndo">取り消し</button>
       </div>
@@ -1223,11 +1226,19 @@
     $("btnRect").classList.toggle("on", on);
     document.body.classList.toggle("rectmode", on);
     if (map) map.setOptions({ draggable: !on });
-    if (!on) { $("lasso").hidden = true; $("lassoN").hidden = true; }
+    if (!on) hideLasso();
     if (on && eraser) {
       eraser = false;
       $("btnEraser").classList.remove("on");
     }
+  }
+
+  // 描いた線を消す（SVGはhidden属性が効かないのでstyleで消す）
+  function hideLasso() {
+    var svg = $("lasso"), path = $("lassoPath"), lbl = $("lassoN");
+    if (svg) svg.style.display = "none";
+    if (path) path.setAttribute("d", "");
+    if (lbl) lbl.hidden = true;
   }
 
   // 画面上の座標 → 緯度経度
@@ -1315,10 +1326,12 @@
     }
 
     function down(e) {
-      if (!rectMode || e.button > 0) return;
+      var isRight = (e.button === 2) || (e.buttons === 2);
+      // 右ドラッグならモードに関係なく投げ縄。左は地図移動のまま
+      if (!isRight && (!rectMode || e.button > 0)) return;
       drawing = true;
       pts = [[e.clientX, e.clientY]];
-      svg.hidden = false;
+      svg.style.display = "block";
       lbl.hidden = true;
       render();
       if (el.setPointerCapture && e.pointerId !== undefined) el.setPointerCapture(e.pointerId);
@@ -1349,8 +1362,7 @@
     function up(e) {
       if (!drawing) return;
       drawing = false;
-      svg.hidden = true;
-      lbl.hidden = true;
+      hideLasso();
       e.preventDefault(); e.stopPropagation();
       if (pts.length < 8) return;                 // ほぼ動いていない＝ただのクリック
       var poly = toPoly(0);
@@ -1366,7 +1378,9 @@
     el.addEventListener("pointerdown", down, true);
     el.addEventListener("pointermove", move, true);
     el.addEventListener("pointerup", up, true);
-    el.addEventListener("pointercancel", function () { drawing = false; svg.hidden = true; lbl.hidden = true; }, true);
+    el.addEventListener("pointercancel", function () { drawing = false; hideLasso(); }, true);
+    // 右ドラッグを使うのでブラウザのメニューは出さない
+    el.addEventListener("contextmenu", function (e) { e.preventDefault(); e.stopPropagation(); }, true);
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && rectMode) setRectMode(false);
     });
