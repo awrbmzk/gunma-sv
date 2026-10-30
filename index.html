@@ -432,6 +432,12 @@
       </div>
       <input type="file" id="impFile" accept=".json" hidden>
       <p class="note" id="progNote"></p>
+
+      <h3 style="margin-top:20px">やり直し</h3>
+      <div class="btnrow">
+        <button class="bigbtn undoish" id="btnReset">消した記録をすべてリセット</button>
+      </div>
+      <p class="note">消した道が全部もとに戻ります。同期している端末にも反映されます。先に「書き出す」でバックアップしておくと安心です。</p>
     </div>
   </div>
 </div>
@@ -700,6 +706,7 @@
       if (confirm("画面内の " + num(ids.length) + " 本を消します。よろしいですか？")) mark(ids, true);
     });
     $("btnUndo").addEventListener("click", undo);
+    $("btnReset").addEventListener("click", resetAll);
     $("btnExp").addEventListener("click", exportDone);
     $("btnImp").addEventListener("click", function () { $("impFile").click(); });
     $("impFile").addEventListener("change", importDone);
@@ -913,6 +920,16 @@
     saveDone();
     syncPush();
     refresh();
+  }
+
+  function resetAll() {
+    var ids = [];
+    for (var id in done) if (done[id] > 0) ids.push(id);
+    if (!ids.length) { alert("消した道はまだありません。"); return; }
+    if (!confirm("消した " + num(ids.length) + " 本を、すべて消していない状態に戻します。\n\n同期している端末（スマホ・PC）にも反映されます。\n先に「書き出す」でバックアップを取っておくことをおすすめします。")) return;
+    if (!confirm("本当にリセットしますか？")) return;
+    mark(ids, false);
+    $("progNote").textContent = num(ids.length) + " 本をもとに戻しました。すぐなら「取り消し」で元に戻せます。";
   }
 
   function exportDone() {
