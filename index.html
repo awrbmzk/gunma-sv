@@ -386,7 +386,13 @@
       <div id="elevBox">
         <label class="f">標高　<b id="elevLbl">すべて</b></label>
         <input type="range" id="felev" min="0" max="1500" step="50" value="0">
-        <label class="sw"><span>起伏の大きい所だけ<br><small style="color:var(--muted)">まわり1kmで標高差150m以上</small></span><input type="checkbox" id="frelief"></label>
+        <label class="f">平野を隠す（山間部だけ）</label>
+        <select id="fmt">
+          <option value="">隠さない（全部）</option>
+          <option value="1">ゆるめ　平野をほぼ除く</option>
+          <option value="2">標準　　山ぎわから上</option>
+          <option value="3">強め　　深い山だけ</option>
+        </select>
       </div>
       <p class="note" id="elevNote" hidden>標高での絞り込みは、データに標高を追加すると使えます。</p>
       <label class="f">道路分類</label>
@@ -476,7 +482,7 @@
 
   function loadData() {
     $("gProg").textContent = "地図データを読み込んでいます…";
-    return fetch(DATA_URL, { cache: "force-cache" }).then(function (r) {
+    return fetch(DATA_URL, { cache: "no-cache" }).then(function (r) {
       if (!r.ok) throw new Error("データが見つかりません（" + DATA_URL + " / HTTP " + r.status + "）");
       return r.json();
     }).then(function (j) {
@@ -664,7 +670,7 @@
       $("elevLbl").textContent = this.value === "0" ? "すべて" : this.value + " m 以上";
     });
     $("felev").addEventListener("change", refresh);
-    $("frelief").addEventListener("change", refresh);
+    $("fmt").addEventListener("change", refresh);
     $("fctg").addEventListener("change", refresh);
     $("fmuni").addEventListener("change", function () {
       refresh();
@@ -1150,7 +1156,11 @@
     if (hasElev) {
       var mel = Number($("felev").value);
       if (mel > 0 && (o.elev === null || o.elev < mel)) return false;
-      if ($("frelief").checked && o.relief < 150) return false;
+      var mt = $("fmt").value;
+      if (mt) {
+        var th = MT_LEVELS[mt];
+        if (o.relief < th[0] && (o.elev === null || o.elev < th[1])) return false;
+      }
     }
     return true;
   }
@@ -1243,6 +1253,8 @@
   // ---------- なぞって囲って消す（投げ縄） ----------
   var rectMode = false;
   var hasElev = false;
+  // 平野を隠す度合い [起伏m, 標高m] のどちらかを満たせば「山間部」とみなす
+  var MT_LEVELS = { "1": [40, 400], "2": [80, 600], "3": [150, 900] };
 
   function setRectMode(on) {
     rectMode = on;
