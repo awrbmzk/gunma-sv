@@ -386,12 +386,19 @@
       <div id="elevBox">
         <label class="f">標高　<b id="elevLbl">すべて</b></label>
         <input type="range" id="felev" min="0" max="1500" step="50" value="0">
-        <label class="f">平野を隠す（山間部だけ）</label>
+        <label class="f">地形で絞る</label>
         <select id="fmt">
-          <option value="">隠さない（全部）</option>
-          <option value="1">ゆるめ　平野をほぼ除く</option>
-          <option value="2">標準　　山ぎわから上</option>
-          <option value="3">強め　　深い山だけ</option>
+          <option value="">すべて表示</option>
+          <optgroup label="山間部だけ（平野を隠す）">
+            <option value="m1">ゆるめ　平野をほぼ除く</option>
+            <option value="m2">標準　　山ぎわから上</option>
+            <option value="m3">強め　　深い山だけ</option>
+          </optgroup>
+          <optgroup label="平野だけ（山を隠す）">
+            <option value="p1">ゆるめ　深い山だけ除く</option>
+            <option value="p2">標準　　山ぎわから上を除く</option>
+            <option value="p3">強め　　平らな所だけ</option>
+          </optgroup>
         </select>
       </div>
       <p class="note" id="elevNote" hidden>標高での絞り込みは、データに標高を追加すると使えます。</p>
@@ -1158,8 +1165,11 @@
       if (mel > 0 && (o.elev === null || o.elev < mel)) return false;
       var mt = $("fmt").value;
       if (mt) {
-        var th = MT_LEVELS[mt];
-        if (o.relief < th[0] && (o.elev === null || o.elev < th[1])) return false;
+        // 平野だけ(p)のときは、ゆるめ＝除外も控えめ になるようしきい値を逆から当てる
+        var lv = mt.charAt(0) === "m" ? mt.charAt(1) : String(4 - Number(mt.charAt(1)));
+        var th = MT_LEVELS[lv];
+        var isMt = o.relief >= th[0] || (o.elev !== null && o.elev >= th[1]);
+        if (mt.charAt(0) === "m" ? !isMt : isMt) return false;
       }
     }
     return true;
