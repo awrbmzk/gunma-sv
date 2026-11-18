@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#f4efe3">
 <title>群馬SV空白マップ</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root {
     --paper: #f4efe3;
@@ -38,7 +40,12 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  #map { position: absolute; inset: 0; background: #e8e0cc; }
+  [hidden] { display: none !important; }   /* display を指定した要素でも hidden が効くように */
+
+  /* z-index:0 で地図の中に重なり順を閉じ込める。これが無いとLeafletの地図が上のバーを覆う */
+  #map { position: absolute; inset: 0; background: #e8e0cc; z-index: 0; }
+  .leaflet-container { background: #e8e0cc; font: inherit; }
+  .leaflet-container a { color: var(--ai); }
 
   /* ---- 上部バー ---- */
   .topbar {
@@ -92,6 +99,9 @@
 
   .iconbtn.on { background: var(--ai); color: #fff; border-color: var(--ai); }
 
+  .iconbtn.wide { width: auto; min-width: 42px; padding: 0 14px; font-size: 13.5px; font-weight: 600; gap: 5px; }
+  .iconbtn.wide b { font-size: 15px; font-weight: 400; }
+
   /* ---- 右下の丸ボタン ---- */
   .fabs {
     position: absolute;
@@ -119,6 +129,45 @@
 
   .fab.on { background: var(--verm); color: #fff; border-color: var(--verm); }
   .fab.loc.on { background: var(--ai); border-color: var(--ai); }
+
+  #modebar {
+    position: fixed;
+    top: calc(var(--sat) + 60px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 11;
+    background: var(--verm);
+    color: #fff;
+    border-radius: 999px;
+    padding: 8px 10px 8px 16px;
+    font-size: 13.5px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 4px 16px -6px rgba(34, 30, 23, .7);
+    white-space: nowrap;
+    max-width: calc(100% - 24px);
+  }
+
+  #modebar small { font-weight: 400; opacity: .9; font-size: 12px; }
+
+  #modebar button {
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    border: 0;
+    border-radius: 999px;
+    padding: 5px 12px;
+    background: rgba(255, 255, 255, .9);
+    color: var(--verm);
+    cursor: pointer;
+  }
+
+  @media (min-width: 820px) {
+    #modebar { left: calc(50% - 190px); }
+    body.nopanel #modebar { left: 50%; }
+  }
 
   #lasso {
     position: fixed;
@@ -313,6 +362,12 @@
   .legend span { display: flex; align-items: center; gap: 4px; }
   .legend i { width: 13px; height: 3px; border-radius: 2px; display: block; }
 
+  /* ---- パネルを隠して地図を全画面にする ---- */
+  body.nopanel .sheet { display: none; }
+  body.nopanel .fabs { bottom: calc(var(--sab) + 20px); }
+  body.nopanel .legend { bottom: calc(var(--sab) + 20px); }
+  body.nopanel .action { bottom: calc(var(--sab) + 20px); }
+
   @media (min-width: 820px) {
     .sheet { left: auto; right: 0; top: 0; bottom: 0; width: 380px; max-height: none; border-radius: 0; border-left: 1px solid var(--line); transform: none !important; }
     .sheet.closed { transform: none; }
@@ -321,6 +376,10 @@
     .fabs { right: 400px; bottom: 30px; }
     .action { right: 400px; bottom: 30px; left: 20px; max-width: 420px; }
     .legend { bottom: 30px; }
+
+    body.nopanel .topbar { right: 8px; }
+    body.nopanel .fabs { right: 10px; }
+    body.nopanel .action { right: 20px; }
   }
 </style>
 </head>
@@ -335,7 +394,8 @@
     <span class="gone">消 <b id="pGone">–</b></span>
   </div>
   <div style="flex:1 1 auto"></div>
-  <div class="iconbtn" id="btnSv" title="Googleの青い線">◎</div>
+  <div class="iconbtn wide" id="btnBase" title="地図の種類を切り替える"><b>◧</b><span id="baseTxt">淡色</span></div>
+  <div class="iconbtn wide" id="btnFull" title="下のパネルを隠して地図を全画面にする"><b>⤢</b><span id="fullTxt">全画面</span></div>
 </div>
 
 <div class="fabs" id="fabs" hidden>
@@ -344,6 +404,8 @@
   <div class="fab" id="btnEraser" title="消しゴムモード">✕</div>
 </div>
 
+<div id="modebar" hidden><span id="modetxt"></span><button id="modeoff">やめる</button></div>
+
 <svg id="lasso" style="display:none"><path id="lassoPath" d=""></path></svg>
 <div id="lassoN" hidden></div>
 
@@ -351,6 +413,7 @@
   <span><i style="background:#b8462c"></i>0%</span>
   <span><i style="background:#c98a1e"></i>〜29%</span>
   <span><i style="background:#d8b44a"></i>〜59%</span>
+  <span style="border-left:1px solid var(--line);padding-left:9px"><a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:none">地理院タイル</a></span>
 </div>
 
 <div class="action" id="action" hidden>
@@ -414,13 +477,24 @@
       <label class="f">市町村</label>
       <select id="fmuni"></select>
       <label class="sw" style="margin-top:6px"><span>消した道も薄く表示</span><input type="checkbox" id="showdone"></label>
-      <label class="sw"><span>Googleの青い線（公式SVの範囲）</span><input type="checkbox" id="svchk"></label>
+      <label class="f">背景の地図（国土地理院）</label>
+      <select id="fbase">
+        <option value="pale">淡色地図　道が見やすい</option>
+        <option value="std">標準地図　情報が多い</option>
+        <option value="relief">色別標高図　山の高さが分かる</option>
+        <option value="photo">空中写真　実際の見た目</option>
+      </select>
+      <label class="sw" style="margin-top:6px"><span>このパネルを隠して全画面<br><small style="color:var(--muted)">右上の「メニュー」で戻せます</small></span><input type="checkbox" id="fullchk"></label>
     </div>
   </div>
   <div class="pane" id="pProg" hidden>
     <div class="set">
       <h3>この端末の記録</h3>
       <div style="font-size:14px">消した道 <b id="gN">0</b> 本 ／ <b id="gKm">0</b> km<br>残り <b id="gRest">0</b> 本</div>
+      <label class="sw" style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px">
+        <span><b>消しゴムモード</b><br><small style="color:var(--muted)">道をクリックするだけで次々消せます</small></span>
+        <input type="checkbox" id="eraserchk">
+      </label>
       <div class="btnrow">
         <button class="bigbtn ghost" id="btnScreen">画面内をまとめて消す</button>
       </div>
@@ -452,22 +526,19 @@
 <div class="gate" id="gate">
   <h1>群馬SV空白マップ</h1>
   <p>公式ストリートビューが無い道を地図に出して、行ったところを消していくためのページです。</p>
-  <div id="gKey">
-    <label class="f" style="font-size:13px;color:var(--muted)">Google Maps APIキー</label>
-    <input type="password" id="key" placeholder="AIza…" autocomplete="off" inputmode="text">
-    <p class="note">このブラウザにだけ保存されます。キーには Maps JavaScript API の権限が必要です。</p>
-    <button class="bigbtn go" id="btnStart">はじめる</button>
-  </div>
-  <div class="prog" id="gProg"></div>
+  <div class="prog" id="gProg">準備しています…</div>
   <div class="err" id="gErr"></div>
+  <div id="gRetry" hidden><button class="bigbtn go" id="btnStart">もう一度読み込む</button></div>
+  <p class="note" style="margin-top:22px">背景の地図は国土地理院の<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>を使っています。APIキーも料金もかかりません。</p>
 </div>
 
 <script>
 (function () {
   "use strict";
-  var KKEY = "sv-key", DKEY = "sv-done-v1", SVKEY = "sv-layer-on", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
+  var DKEY = "sv-done-v1", BKEY = "sv-base", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
+  var PKEY = "sv-nopanel";
   var DATA_URL = "gunma_sv_mobile.json";
-  var map, svLayer, meMarker, meCircle, sel = null;
+  var map, baseLayer, meRenderer, meMarker, meCircle, sel = null;
   var roads = [], grid = {}, GS = 0.02;
   var done = {}, doneN = 0, undoStack = [];
   var pool = [], drawn = [], inView = [];
@@ -483,20 +554,29 @@
   function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
 
   // ---------- 起動 ----------
-  var savedKey = lsGet(KKEY);
-  if (savedKey) $("key").value = savedKey;
+  // 背景地図（国土地理院の地理院タイル）。キーも料金も不要
+  var BASES = {
+    pale:   { name: "淡色",   url: "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", maxNative: 18 },
+    std:    { name: "標準",   url: "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", maxNative: 18 },
+    relief: { name: "標高",   url: "https://cyberjapandata.gsi.go.jp/xyz/relief/{z}/{x}/{y}.png", maxNative: 15 },
+    photo:  { name: "写真",   url: "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", maxNative: 18 }
+  };
+  var BASE_ORDER = ["pale", "std", "relief", "photo"];
+
   $("btnStart").addEventListener("click", start);
-  $("key").addEventListener("keydown", function (e) { if (e.key === "Enter") start(); });
+  start();
 
   function start() {
-    var k = $("key").value.trim();
-    if (!k) { $("gErr").textContent = "キーを入れてください。"; return; }
-    lsSet(KKEY, k);
-    $("gKey").hidden = true;
     $("gErr").textContent = "";
-    loadData().then(function () { return loadMaps(k); }).catch(function (e) {
+    $("gRetry").hidden = true;
+    if (!window.L) {
+      $("gErr").textContent = "地図の部品（Leaflet）を読み込めませんでした。通信状態を確かめて、もう一度試してください。";
+      $("gRetry").hidden = false;
+      return;
+    }
+    loadData().then(function () { init(); }).catch(function (e) {
       $("gErr").textContent = String(e && e.message || e);
-      $("gKey").hidden = false;
+      $("gRetry").hidden = false;
     });
   }
 
@@ -560,40 +640,6 @@
     });
   }
 
-  var diagShown = false;
-  var origError = console.error;
-  console.error = function () {
-    var s = Array.prototype.map.call(arguments, String).join(" ");
-    var m = /Google Maps JavaScript API (?:error|warning):\s*(\w+)/.exec(s);
-    if (m && !diagShown) {
-      diagShown = true;
-      $("gErr").textContent = "Googleがキーを受け付けませんでした：" + m[1] +
-        "\n・Maps JavaScript API が有効か\n・キーの「APIの制限」に入っているか\n" +
-        "・「ウェブサイトの制限」にこのページのURLが入っているか\nを確認してください。";
-      $("gKey").hidden = false;
-    }
-    origError.apply(console, arguments);
-  };
-
-  function loadMaps(k) {
-    return new Promise(function (resolve, reject) {
-      window.__ready = function () { init(); resolve(); };
-      window.gm_authFailure = function () {
-        setTimeout(function () {
-          if (!diagShown) {
-            $("gErr").textContent = "キーが拒否されました。制限設定を確認してください。";
-            $("gKey").hidden = false;
-          }
-        }, 400);
-      };
-      var s = document.createElement("script");
-      s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(k) +
-        "&v=weekly&language=ja&region=JP&callback=__ready";
-      s.onerror = function () { reject(new Error("Googleマップを読み込めませんでした。")); };
-      document.head.appendChild(s);
-    });
-  }
-
   // ---------- 地図 ----------
   var COLORS = ["#b8462c", "#c98a1e", "#d8b44a"], DONE_C = "#8d8474";
 
@@ -603,20 +649,27 @@
     var v = (lsGet(VKEY) || "").split(",");
     var c0 = (v.length === 3 && isFinite(v[0])) ? { lat: +v[0], lng: +v[1] } : { lat: 36.39, lng: 139.06 };
     var z0 = (v.length === 3 && isFinite(v[2])) ? +v[2] : 11;
-    map = new google.maps.Map($("map"), {
-      center: c0, zoom: z0,
-      mapTypeControl: false, streetViewControl: false, fullscreenControl: false,
-      zoomControl: false, clickableIcons: false, gestureHandling: "greedy",
-      isFractionalZoomEnabled: true
+    map = L.map($("map"), {
+      center: [c0.lat, c0.lng], zoom: z0,
+      minZoom: 5, maxZoom: 20,
+      zoomControl: false, attributionControl: false,
+      doubleClickZoom: false,        // ダブルタップ＋スライドを自前で処理するため
+      zoomSnap: 0, zoomDelta: 0.5,   // 中途半端な倍率も許す（Googleと同じ感じ）
+      preferCanvas: true             // 道を何百本も描くのでキャンバスのほうが速い
     });
-    svLayer = new google.maps.StreetViewCoverageLayer();
-    setSvLayer(lsGet(SVKEY) !== "0");
+    // 現在地の印は道より上に出したいので、専用の層を作る
+    map.createPane("mePane");
+    map.getPane("mePane").style.zIndex = 650;
+    map.getPane("mePane").style.pointerEvents = "none";
+    meRenderer = L.svg({ pane: "mePane" });
 
-    map.addListener("idle", function () {
+    setBase(lsGet(BKEY) || "pale");
+
+    map.on("moveend", function () {
       draw();
       renderNear();
       var c = map.getCenter();
-      if (c) lsSet(VKEY, c.lat().toFixed(5) + "," + c.lng().toFixed(5) + "," + map.getZoom());
+      if (c) lsSet(VKEY, c.lat.toFixed(5) + "," + c.lng.toFixed(5) + "," + map.getZoom());
     });
 
     setupDoubleTapZoom();
@@ -645,17 +698,19 @@
       });
     });
 
-    $("btnSv").addEventListener("click", function () {
-      setSvLayer(!this.classList.contains("on"));
+    $("btnBase").addEventListener("click", function () {
+      var i = BASE_ORDER.indexOf(baseKey);
+      setBase(BASE_ORDER[(i + 1) % BASE_ORDER.length]);
     });
-    $("svchk").addEventListener("change", function () { setSvLayer(this.checked); });
+    $("fbase").addEventListener("change", function () { setBase(this.value); });
+    $("btnFull").addEventListener("click", function () { setNoPanel(!document.body.classList.contains("nopanel"), true); });
+    $("fullchk").addEventListener("change", function () { setNoPanel(this.checked, true); });
+    setNoPanel(lsGet(PKEY) === "1", false);
     $("btnLoc").addEventListener("click", toggleFollow);
     $("btnRect").addEventListener("click", function () { setRectMode(!rectMode); });
-    $("btnEraser").addEventListener("click", function () {
-      eraser = !eraser;
-      this.classList.toggle("on", eraser);
-      if (eraser && rectMode) setRectMode(false);
-    });
+    $("btnEraser").addEventListener("click", function () { setEraser(!eraser); });
+    $("eraserchk").addEventListener("change", function () { setEraser(this.checked); });
+    $("modeoff").addEventListener("click", function () { setEraser(false); setRectMode(false); });
     $("aClose").addEventListener("click", function () { sel = null; $("action").hidden = true; });
     $("aDone").addEventListener("click", function () {
       if (!sel) return;
@@ -708,7 +763,7 @@
           b[2] = Math.max(b[2], o.b[2]); b[3] = Math.max(b[3], o.b[3]);
         }
       });
-      if (b) map.fitBounds(new google.maps.LatLngBounds({ lat: b[0], lng: b[1] }, { lat: b[2], lng: b[3] }));
+      if (b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]]);
     });
     $("btnScreen").addEventListener("click", function () {
       var ids = inView.filter(function (o) { return !isDone(o.id); }).map(function (o) { return o.id; });
@@ -727,37 +782,36 @@
   }
 
   // ---------- ダブルタップ＋上下スライドでズーム ----------
+  // Leafletは地図の枠に自前の指操作を登録しているので、こちらはdocumentの
+  // キャプチャ段階で先に受け取って、必要なときだけLeafletに渡さないようにする
+  function onMap(e) {
+    var el = $("map");
+    return el && e.target && (el === e.target || el.contains(e.target));
+  }
+
   function setupDoubleTapZoom() {
     var el = $("map");
     var lastTapT = 0, lastTapX = 0, lastTapY = 0;
     var active = false, startY = 0, startZoom = 0, moved = false;
-    var anchorWorld = null, offX = 0, offY = 0;
-
-    function worldOf(latLng) { return map.getProjection().fromLatLngToPoint(latLng); }
+    var anchorLL = null, anchorPt = null;
 
     function beginAt(x, y) {
-      var proj = map.getProjection();
-      if (!proj) return false;
       var r = el.getBoundingClientRect();
-      offX = x - r.left - r.width / 2;
-      offY = y - r.top - r.height / 2;
+      anchorPt = L.point(x - r.left, y - r.top);
+      anchorLL = map.containerPointToLatLng(anchorPt);
       startZoom = map.getZoom();
-      var scale = Math.pow(2, startZoom);
-      var cw = worldOf(map.getCenter());
-      anchorWorld = new google.maps.Point(cw.x + offX / scale, cw.y + offY / scale);
       return true;
     }
 
+    // 指を置いた場所を動かさずに倍率だけ変える
     function applyZoom(z) {
-      z = Math.max(3, Math.min(20, z));
-      var scale = Math.pow(2, z);
-      var center = map.getProjection().fromPointToLatLng(
-        new google.maps.Point(anchorWorld.x - offX / scale, anchorWorld.y - offY / scale));
-      map.setZoom(z);
-      map.setCenter(center);
+      z = Math.max(5, Math.min(20, z));
+      var centerPx = map.project(anchorLL, z).subtract(anchorPt.subtract(map.getSize().divideBy(2)));
+      map.setView(map.unproject(centerPx, z), z, { animate: false });
     }
 
-    el.addEventListener("touchstart", function (e) {
+    document.addEventListener("touchstart", function (e) {
+      if (!onMap(e) || rectMode) return;
       if (e.touches.length !== 1) { active = false; return; }
       var t = e.touches[0], now = Date.now();
       var isDouble = (now - lastTapT < 320) &&
@@ -772,7 +826,7 @@
       e.stopPropagation();
     }, { passive: false, capture: true });
 
-    el.addEventListener("touchmove", function (e) {
+    document.addEventListener("touchmove", function (e) {
       if (!active) return;
       e.preventDefault();
       e.stopPropagation();
@@ -789,8 +843,8 @@
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
     }
-    el.addEventListener("touchend", end, { passive: false, capture: true });
-    el.addEventListener("touchcancel", end, { passive: false, capture: true });
+    document.addEventListener("touchend", end, { passive: false, capture: true });
+    document.addEventListener("touchcancel", end, { passive: false, capture: true });
   }
 
   // ---------- 下のシートをスワイプで出し入れ ----------
@@ -859,6 +913,28 @@
     });
   }
 
+  // 消しゴムモードの切り替え（ボタン・チェック・上の帯をまとめて更新）
+  function setEraser(on) {
+    eraser = on;
+    $("btnEraser").classList.toggle("on", on);
+    $("eraserchk").checked = on;
+    if (on && rectMode) setRectMode(false);
+    updateModeBar();
+  }
+
+  function updateModeBar() {
+    var bar = $("modebar");
+    if (eraser) {
+      $("modetxt").innerHTML = "消しゴムモード　<small>道をクリックすると消えます</small>";
+      bar.hidden = false;
+    } else if (rectMode) {
+      $("modetxt").innerHTML = "なぞって消すモード　<small>地図をなぞって囲ってください</small>";
+      bar.hidden = false;
+    } else {
+      bar.hidden = true;
+    }
+  }
+
   // 長さの下限・上限。下限が上限を追い越さないようにする
   function syncLen(moved) {
     var a = $("flen"), b = $("flen2");
@@ -877,13 +953,44 @@
     $("lenLbl").textContent = txt;
   }
 
-  // 青い線（公式SV範囲）のオン・オフ。上の◎ボタンと絞り込みのチェックの両方から切り替える
-  function setSvLayer(on) {
-    if (svLayer) svLayer.setMap(on ? map : null);
-    var b = $("btnSv"), c = $("svchk");
-    if (b) b.classList.toggle("on", on);
+  // 背景地図の切り替え。上のボタンと絞り込みの選択の両方から呼ばれる
+  var baseKey = "pale";
+  function setBase(k) {
+    var def = BASES[k] || BASES.pale;
+    k = BASES[k] ? k : "pale";
+    baseKey = k;
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseLayer = L.tileLayer(def.url, {
+      maxNativeZoom: def.maxNative, maxZoom: 20, minZoom: 5,
+      // 元のタイルより拡大したときはぼやけるが、道の位置は正確なまま
+      detectRetina: false, crossOrigin: true
+    });
+    baseLayer.addTo(map);
+    if (baseLayer.bringToBack) baseLayer.bringToBack();
+    $("baseTxt").textContent = def.name;
+    var s = $("fbase");
+    if (s) s.value = k;
+    lsSet(BKEY, k);
+  }
+
+  // 下のパネル（近くの道・絞り込み・進捗）を隠して地図を全画面にする
+  function setNoPanel(on, byUser) {
+    document.body.classList.toggle("nopanel", on);
+    var c = $("fullchk");
     if (c) c.checked = on;
-    lsSet(SVKEY, on ? "1" : "0");
+    var b = $("btnFull");
+    if (b) {
+      b.classList.toggle("on", on);
+      b.title = on ? "パネルを出す" : "下のパネルを隠して地図を全画面にする";
+      b.querySelector("b").textContent = on ? "☰" : "⤢";
+      $("fullTxt").textContent = on ? "メニュー" : "全画面";
+    }
+    lsSet(PKEY, on ? "1" : "0");
+    if (!on && byUser) {
+      var sh = $("sheet");
+      if (sh && sh.classList.contains("closed") && window.innerWidth < 820) sh.classList.remove("closed");
+    }
+    if (map) setTimeout(function () { map.invalidateSize({ animate: false }); }, 60);
   }
 
   function fillSelect(id, arr, all) {    $(id).innerHTML = '<option value="">' + all + "</option>" +
@@ -1237,8 +1344,9 @@
   function getLine() {
     var pl = pool.pop();
     if (!pl) {
-      pl = new google.maps.Polyline({ clickable: true });
-      pl.addListener("click", function () {
+      pl = L.polyline([], { interactive: true });
+      pl.on("click", function (ev) {
+        if (ev && ev.originalEvent) L.DomEvent.stop(ev.originalEvent);
         if (!pl._o) return;
         if (eraser) mark([pl._o.id], !isDone(pl._o.id));
         else select(pl._o);
@@ -1251,8 +1359,7 @@
     if (!map) return;
     var b = map.getBounds();
     if (!b) return;
-    var sw = b.getSouthWest(), ne = b.getNorthEast();
-    var s = sw.lat(), w = sw.lng(), n = ne.lat(), e = ne.lng();
+    var s = b.getSouth(), w = b.getWest(), n = b.getNorth(), e = b.getEast();
     var on = bands(), minLen = Number($("flen").value), ctg = $("fctg").value, mi = $("fmuni").value;
     var seen = {}, hits = [];
     for (var y = Math.floor(s / GS); y <= Math.floor(n / GS); y++) {
@@ -1273,20 +1380,28 @@
     hits.sort(function (a, b2) { return b2.len - a.len; });
     inView = hits;
     if (hits.length > CAP) hits = hits.slice(0, CAP);
-    drawn.forEach(function (pl) { pl.setMap(null); pl._o = null; pool.push(pl); });
+    drawn.forEach(function (pl) { map.removeLayer(pl); pl._o = null; pool.push(pl); });
     drawn = [];
+    // キャンバスには重なり順の指定が無いので、後から描いたものが上に来る順に並べ替える
+    // （消した道 → 59%以下 → 29%以下 → 0% の順。0%が一番上）
+    hits = hits.slice().sort(function (a, b2) {
+      var da = isDone(a.id) ? 1 : 0, db = isDone(b2.id) ? 1 : 0;
+      if (da !== db) return db - da;
+      return b2.band - a.band;
+    });
     var z = map.getZoom();
+    var wt = z >= 16 ? 8 : (z >= 14 ? 6 : 3.5);
     hits.forEach(function (o) {
       var pl = getLine(), dn = isDone(o.id);
       pl._o = o;
-      pl.setOptions({
-        path: o.pts.map(function (c) { return { lat: c[1], lng: c[0] }; }),
-        strokeColor: dn ? DONE_C : COLORS[o.band],
-        strokeWeight: dn ? 3 : (z >= 16 ? 8 : (z >= 14 ? 6 : 3.5)),
-        strokeOpacity: dn ? .45 : (o.band === 0 ? .95 : .8),
-        zIndex: dn ? 1 : 10 - o.band
+      pl.setLatLngs(o.pts.map(function (c) { return [c[1], c[0]]; }));
+      pl.setStyle({
+        color: dn ? DONE_C : COLORS[o.band],
+        weight: dn ? 3 : wt,
+        opacity: dn ? .45 : (o.band === 0 ? .95 : .8),
+        lineCap: "round", lineJoin: "round"
       });
-      pl.setMap(map);
+      pl.addTo(map);
       drawn.push(pl);
     });
   }
@@ -1319,12 +1434,14 @@
     rectMode = on;
     $("btnRect").classList.toggle("on", on);
     document.body.classList.toggle("rectmode", on);
-    if (map) map.setOptions({ draggable: !on });
+    if (map && map.dragging) { if (on) map.dragging.disable(); else map.dragging.enable(); }
     if (!on) hideLasso();
     if (on && eraser) {
       eraser = false;
       $("btnEraser").classList.remove("on");
+      $("eraserchk").checked = false;
     }
+    updateModeBar();
   }
 
   // 描いた線を消す（SVGはhidden属性が効かないのでstyleで消す）
@@ -1337,14 +1454,9 @@
 
   // 画面上の座標 → 緯度経度
   function pointToLatLng(x, y) {
-    var proj = map.getProjection();
-    if (!proj) return null;
+    if (!map) return null;
     var r = $("map").getBoundingClientRect();
-    var scale = Math.pow(2, map.getZoom());
-    var cw = proj.fromLatLngToPoint(map.getCenter());
-    return proj.fromPointToLatLng(new google.maps.Point(
-      cw.x + (x - r.left - r.width / 2) / scale,
-      cw.y + (y - r.top - r.height / 2) / scale));
+    return map.containerPointToLatLng([x - r.left, y - r.top]);
   }
 
   // 点が多角形の中にあるか（x=経度, y=緯度）
@@ -1408,7 +1520,7 @@
       var poly = [], ll;
       for (var j = 0; j < src.length; j++) {
         ll = pointToLatLng(src[j][0], src[j][1]);
-        if (ll) poly.push([ll.lng(), ll.lat()]);
+        if (ll) poly.push([ll.lng, ll.lat]);
       }
       return poly;
     }
@@ -1420,6 +1532,7 @@
     }
 
     function down(e) {
+      if (!onMap(e)) return;
       var isRight = (e.button === 2) || (e.buttons === 2);
       // 右ドラッグならモードに関係なく投げ縄。左は地図移動のまま
       if (!isRight && (!rectMode || e.button > 0)) return;
@@ -1469,10 +1582,11 @@
       }
     }
 
-    el.addEventListener("pointerdown", down, true);
-    el.addEventListener("pointermove", move, true);
-    el.addEventListener("pointerup", up, true);
-    el.addEventListener("pointercancel", function () { drawing = false; hideLasso(); }, true);
+    // Leafletが地図の枠に登録した操作より先に受け取るため、documentのキャプチャ段階で待つ
+    document.addEventListener("pointerdown", down, true);
+    document.addEventListener("pointermove", move, true);
+    document.addEventListener("pointerup", up, true);
+    document.addEventListener("pointercancel", function () { drawing = false; hideLasso(); }, true);
     // 右ドラッグを使うのでブラウザのメニューは出さない
     el.addEventListener("contextmenu", function (e) { e.preventDefault(); e.stopPropagation(); }, true);
     document.addEventListener("keydown", function (e) {
@@ -1493,18 +1607,19 @@
     $("btnLoc").classList.add("on");
     watchId = navigator.geolocation.watchPosition(function (p) {
       myPos = { lat: p.coords.latitude, lng: p.coords.longitude };
+      var ll = [myPos.lat, myPos.lng];
       if (!meMarker) {
-        meMarker = new google.maps.Marker({ map: map, zIndex: 999,
-          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: "#22527d",
-                  fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3 } });
-        meCircle = new google.maps.Circle({ map: map, strokeWeight: 0, fillColor: "#22527d", fillOpacity: .12, clickable: false });
+        meCircle = L.circle(ll, { radius: 30, renderer: meRenderer, stroke: false,
+          fillColor: "#22527d", fillOpacity: .12, interactive: false }).addTo(map);
+        meMarker = L.circleMarker(ll, { radius: 7, renderer: meRenderer, fillColor: "#22527d",
+          fillOpacity: 1, color: "#fff", weight: 3, interactive: false }).addTo(map);
       }
-      meMarker.setPosition(myPos);
-      meCircle.setCenter(myPos);
+      meMarker.setLatLng(ll);
+      meCircle.setLatLng(ll);
       meCircle.setRadius(Math.min(p.coords.accuracy || 30, 200));
       if (follow) {
-        map.panTo(myPos);
-        if (map.getZoom() < 15) map.setZoom(16);
+        if (map.getZoom() < 15) map.setView(ll, 16);
+        else map.panTo(ll);
       }
       renderNear();
     }, function (err) {
@@ -1523,7 +1638,7 @@
   }
 
   function renderNear() {
-    var base = myPos || (map && map.getCenter() ? { lat: map.getCenter().lat(), lng: map.getCenter().lng() } : null);
+    var base = myPos || (map && map.getCenter() ? { lat: map.getCenter().lat, lng: map.getCenter().lng } : null);
     if (!base) return;
     var on = bands(), minLen = Number($("flen").value), ctg = $("fctg").value, mi = $("fmuni").value;
     var cand = [], seen = {};
@@ -1565,8 +1680,7 @@
       var m = o.pts[Math.floor(o.pts.length / 2)];
       follow = false;
       $("btnLoc").classList.remove("on");
-      map.panTo({ lat: m[1], lng: m[0] });
-      map.setZoom(17);
+      map.setView([m[1], m[0]], 17);
       select(o);
       if (!$("sheet").classList.contains("closed")) toggleSheet();
     };
