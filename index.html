@@ -238,6 +238,8 @@
 
   .bigbtn.ghost { background: var(--surface-2); color: var(--ink); border-color: var(--line); font-weight: 500; }
   .bigbtn.undoish { background: var(--surface-2); color: var(--verm); border-color: var(--verm); }
+  .bigbtn.go2 { background: #1a6b4a; border-color: #1a6b4a; color: #fff; }
+  .bigbtn small { display: block; font-size: 11px; font-weight: 400; opacity: .85; margin-top: 1px; }
 
   /* ---- 下のシート ---- */
   .sheet {
@@ -425,8 +427,11 @@
     <div class="x" id="aClose">×</div>
   </div>
   <div class="row">
+    <button class="bigbtn go2" id="aNav">ここへ行く<small id="aNavSub">ルート案内</small></button>
     <button class="bigbtn" id="aDone">行った（消す）</button>
-    <button class="bigbtn ghost" id="aSv">SVを開く</button>
+  </div>
+  <div class="row">
+    <button class="bigbtn ghost" id="aSv">ストリートビューで見る</button>
   </div>
 </div>
 
@@ -484,6 +489,14 @@
         <option value="relief">色別標高図　山の高さが分かる</option>
         <option value="photo">空中写真　実際の見た目</option>
       </select>
+      <label class="f">ルート案内の移動手段</label>
+      <select id="fnav">
+        <option value="driving">車</option>
+        <option value="bicycling">自転車</option>
+        <option value="walking">徒歩</option>
+        <option value="transit">公共交通</option>
+      </select>
+      <label class="sw"><span>案内をすぐ開始する<br><small style="color:var(--muted)">切ると、先にルート全体を確認できます</small></span><input type="checkbox" id="navgo" checked></label>
       <label class="sw" style="margin-top:6px"><span>このパネルを隠して全画面<br><small style="color:var(--muted)">右上の「メニュー」で戻せます</small></span><input type="checkbox" id="fullchk"></label>
     </div>
   </div>
@@ -536,7 +549,8 @@
 (function () {
   "use strict";
   var DKEY = "sv-done-v1", BKEY = "sv-base", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
-  var PKEY = "sv-nopanel";
+  var PKEY = "sv-nopanel", NKEY = "sv-navmode", NGKEY = "sv-navgo";
+  var MODE_JA = { driving: "車", bicycling: "自転車", walking: "徒歩", transit: "公共交通" };
   var DATA_URL = "gunma_sv_mobile.json";
   var map, baseLayer, meRenderer, meMarker, meCircle, sel = null;
   var roads = [], grid = {}, GS = 0.02;
@@ -723,6 +737,14 @@
       var m = sel.pts[Math.floor(sel.pts.length / 2)];
       window.open("https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=" + m[1] + "," + m[0], "_blank");
     });
+    $("aNav").addEventListener("click", function () { if (sel) openNav(sel); });
+    $("fnav").value = lsGet(NKEY) || "driving";
+    $("navgo").checked = lsGet(NGKEY) !== "0";
+    $("fnav").addEventListener("change", function () {
+      lsSet(NKEY, this.value);
+      if (sel) select(sel);
+    });
+    $("navgo").addEventListener("change", function () { lsSet(NGKEY, this.checked ? "1" : "0"); });
     Array.prototype.forEach.call(document.querySelectorAll(".cov"), function (c) {
       c.addEventListener("change", function () {
         if (this.value === "2" && this.checked && lsGet(HEAVY) !== "1") {
@@ -1406,9 +1428,39 @@
     });
   }
 
+  // ---------- Googleマップでルート案内 ----------
+  // 道の「どちらの端」を目的地にするか。今いる場所に近いほうの端を選ぶ
+  function navTarget(o) {
+    var a = o.pts[0], b = o.pts[o.pts.length - 1];
+    var from = here();
+    if (!from) return o.pts[Math.floor(o.pts.length / 2)];
+    return dist(from, { lat: a[1], lng: a[0] }) <= dist(from, { lat: b[1], lng: b[0] }) ? a : b;
+  }
+
+  function here() {
+    if (myPos) return myPos;
+    if (map && map.getCenter()) return { lat: map.getCenter().lat, lng: map.getCenter().lng };
+    return null;
+  }
+
+  function openNav(o) {
+    var t = navTarget(o);
+    var mode = ($("fnav") && $("fnav").value) || "driving";
+    var u = "https://www.google.com/maps/dir/?api=1&destination=" +
+      t[1].toFixed(6) + "," + t[0].toFixed(6) + "&travelmode=" + mode;
+    if ($("navgo") && $("navgo").checked) u += "&dir_action=navigate";
+    // スマホはGoogleマップのアプリに引き渡したいので、そのまま移動する
+    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) location.href = u;
+    else window.open(u, "_blank", "noopener");
+  }
+
   function select(o) {
     sel = o;
     var d = isDone(o.id);
+    var t = navTarget(o), from = here();
+    var dm = from ? dist(from, { lat: t[1], lng: t[0] }) : null;
+    $("aNavSub").textContent = (MODE_JA[($("fnav") && $("fnav").value) || "driving"] || "車") +
+      (dm === null ? "" : "　直線 " + (dm < 1000 ? Math.round(dm) + "m" : (dm / 1000).toFixed(1) + "km"));
     $("aTtl").textContent = (D.ctgs[o.ctg] || "道路").replace("市区町村道等", "市町村道") + "　" +
       (o.len >= 1000 ? (o.len / 1000).toFixed(1) + "km" : o.len + "m");
     $("aSub").textContent = o.ms.map(function (i) { return D.munis[i]; }).join("・") +
