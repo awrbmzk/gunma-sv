@@ -8,7 +8,10 @@
 <meta name="theme-color" content="#f4efe3">
 <title>群馬SV空白マップ</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.6.0/maplibre-gl.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.6.0/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
 <style>
   :root {
     --paper: #f4efe3;
@@ -359,6 +362,17 @@
     z-index: 4;
     display: flex;
     gap: 9px;
+    flex-wrap: wrap;
+    row-gap: 2px;
+    max-width: calc(100% - 80px);   /* 右下の丸ボタンに重ならないように */
+  }
+
+  .legend .cred { border-left: 1px solid var(--line); padding-left: 9px; }
+  .legend .cred a { color: var(--muted); text-decoration: none; }
+
+  /* 画面が狭いときは出典を次の行に落として、折り返しをきれいにする */
+  @media (max-width: 560px) {
+    .legend .cred { flex-basis: 100%; border-left: 0; padding-left: 0; }
   }
 
   .legend span { display: flex; align-items: center; gap: 4px; }
@@ -415,7 +429,7 @@
   <span><i style="background:#b8462c"></i>0%</span>
   <span><i style="background:#c98a1e"></i>〜29%</span>
   <span><i style="background:#d8b44a"></i>〜59%</span>
-  <span style="border-left:1px solid var(--line);padding-left:9px"><a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:none">地理院タイル</a></span>
+  <span class="cred" id="credit"></span>
 </div>
 
 <div class="action" id="action" hidden>
@@ -482,13 +496,21 @@
       <label class="f">市町村</label>
       <select id="fmuni"></select>
       <label class="sw" style="margin-top:6px"><span>消した道も薄く表示</span><input type="checkbox" id="showdone"></label>
-      <label class="f">背景の地図（国土地理院）</label>
+      <label class="f">背景の地図</label>
       <select id="fbase">
-        <option value="pale">淡色地図　道が見やすい</option>
-        <option value="std">標準地図　情報が多い</option>
-        <option value="relief">色別標高図　山の高さが分かる</option>
-        <option value="photo">空中写真　実際の見た目</option>
+        <optgroup label="OpenFreeMap（無料・無制限）">
+          <option value="liberty">標準　　Googleマップに近い</option>
+          <option value="bright">明るい　道路がはっきり</option>
+          <option value="positron">淡色　　赤い道が目立つ</option>
+          <option value="dark">夜　　　暗い背景</option>
+        </optgroup>
+        <optgroup label="国土地理院">
+          <option value="photo">空中写真　実際の見た目</option>
+          <option value="relief">色別標高図　山の高さ</option>
+          <option value="pale">淡色地図　測量用</option>
+        </optgroup>
       </select>
+      <p class="note" id="baseNote" hidden></p>
       <label class="f">ルート案内の移動手段</label>
       <select id="fnav">
         <option value="driving">車</option>
@@ -548,7 +570,7 @@
 <script>
 (function () {
   "use strict";
-  var DKEY = "sv-done-v1", BKEY = "sv-base", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
+  var DKEY = "sv-done-v1", BKEY = "sv-base2", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
   var PKEY = "sv-nopanel", NKEY = "sv-navmode", NGKEY = "sv-navgo";
   var MODE_JA = { driving: "車", bicycling: "自転車", walking: "徒歩", transit: "公共交通" };
   var DATA_URL = "gunma_sv_mobile.json";
@@ -568,14 +590,29 @@
   function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
 
   // ---------- 起動 ----------
-  // 背景地図（国土地理院の地理院タイル）。キーも料金も不要
+  // 背景地図。キーも登録も料金も不要
+  // ofm = OpenFreeMap（OpenStreetMapのデータ。Googleマップに近い見た目）
+  // gsi = 国土地理院の地理院タイル
+  var OSM_CRED = '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a> · OpenMapTiles';
+  var GSI_CRED = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>';
   var BASES = {
-    pale:   { name: "淡色",   url: "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", maxNative: 18 },
-    std:    { name: "標準",   url: "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", maxNative: 18 },
-    relief: { name: "標高",   url: "https://cyberjapandata.gsi.go.jp/xyz/relief/{z}/{x}/{y}.png", maxNative: 15 },
-    photo:  { name: "写真",   url: "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", maxNative: 18 }
+    liberty:  { name: "標準",   type: "ofm", style: "https://tiles.openfreemap.org/styles/liberty" },
+    bright:   { name: "明るい", type: "ofm", style: "https://tiles.openfreemap.org/styles/bright" },
+    positron: { name: "淡色",   type: "ofm", style: "https://tiles.openfreemap.org/styles/positron" },
+    dark:     { name: "夜",     type: "ofm", style: "https://tiles.openfreemap.org/styles/dark" },
+    photo:    { name: "写真",   type: "gsi", url: "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", maxNative: 18 },
+    relief:   { name: "標高",   type: "gsi", url: "https://cyberjapandata.gsi.go.jp/xyz/relief/{z}/{x}/{y}.png", maxNative: 15 },
+    pale:     { name: "地理院", type: "gsi", url: "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", maxNative: 18 }
   };
-  var BASE_ORDER = ["pale", "std", "relief", "photo"];
+  var BASE_ORDER = ["liberty", "bright", "positron", "dark", "photo", "relief", "pale"];
+
+  // ベクトル地図が使えるか（部品を読めなかった・WebGLが無い端末では使えない）
+  function canVector() {
+    if (!(window.maplibregl && window.L && L.maplibreGL)) return false;
+    // 新しい版には supported() が無いので、あるときだけ確認する
+    if (typeof maplibregl.supported === "function") return maplibregl.supported();
+    return true;
+  }
 
   $("btnStart").addEventListener("click", start);
   start();
@@ -677,7 +714,7 @@
     map.getPane("mePane").style.pointerEvents = "none";
     meRenderer = L.svg({ pane: "mePane" });
 
-    setBase(lsGet(BKEY) || "pale");
+    setBase(lsGet(BKEY) || "liberty");
 
     map.on("moveend", function () {
       draw();
@@ -976,22 +1013,46 @@
   }
 
   // 背景地図の切り替え。上のボタンと絞り込みの選択の両方から呼ばれる
-  var baseKey = "pale";
+  var baseKey = "liberty";
   function setBase(k) {
-    var def = BASES[k] || BASES.pale;
-    k = BASES[k] ? k : "pale";
+    if (!BASES[k]) k = "liberty";
+    var def = BASES[k];
+    var note = "";
+    // ベクトル地図が使えない環境では、地理院の淡色地図で代用する
+    if (def.type === "ofm" && !canVector()) {
+      k = "pale"; def = BASES.pale;
+      note = "この環境ではOpenFreeMapを表示できないため、地理院の地図にしています。";
+    }
+    if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+    if (def.type === "ofm") {
+      var lyr = null;
+      try {
+        lyr = L.maplibreGL({ style: def.style, interactive: false, attributionControl: false });
+        lyr.addTo(map);          // WebGLが無いとここで失敗する
+        baseLayer = lyr;
+      } catch (e) {
+        try { if (lyr) map.removeLayer(lyr); } catch (e2) { /* 後始末。失敗しても構わない */ }
+        baseLayer = null;
+        k = "pale"; def = BASES.pale;
+        note = "この環境ではOpenFreeMapを表示できないため、地理院の地図にしています。";
+      }
+    }
+    if (!baseLayer) {
+      baseLayer = L.tileLayer(def.url, {
+        maxNativeZoom: def.maxNative, maxZoom: 20, minZoom: 5,
+        // 元のタイルより拡大したときはぼやけるが、道の位置は正確なまま
+        detectRetina: false, crossOrigin: true
+      });
+      baseLayer.addTo(map);
+    }
     baseKey = k;
-    if (baseLayer) map.removeLayer(baseLayer);
-    baseLayer = L.tileLayer(def.url, {
-      maxNativeZoom: def.maxNative, maxZoom: 20, minZoom: 5,
-      // 元のタイルより拡大したときはぼやけるが、道の位置は正確なまま
-      detectRetina: false, crossOrigin: true
-    });
-    baseLayer.addTo(map);
     if (baseLayer.bringToBack) baseLayer.bringToBack();
     $("baseTxt").textContent = def.name;
+    $("credit").innerHTML = def.type === "ofm" ? OSM_CRED : GSI_CRED;
     var s = $("fbase");
     if (s) s.value = k;
+    var nb = $("baseNote");
+    if (nb) { nb.textContent = note; nb.hidden = !note; }
     lsSet(BKEY, k);
   }
 
