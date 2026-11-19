@@ -514,8 +514,11 @@
       <label class="sw" style="margin-top:6px"><span>消した道も薄く表示</span><input type="checkbox" id="showdone"></label>
       <label class="f">背景の地図</label>
       <select id="fbase">
-        <optgroup label="Googleマップ（APIキーが必要）">
+        <optgroup label="切り替え用の2枚（右上のボタンで一瞬で入れ替わる）">
           <option value="groad">Googleマップ　地図</option>
+          <option value="gblank">地理院　白地図（ベクトル）</option>
+        </optgroup>
+        <optgroup label="Googleマップ（APIキーが必要）">
           <option value="gsat">Googleマップ　航空写真</option>
           <option value="gterr">Googleマップ　地形</option>
         </optgroup>
@@ -630,6 +633,7 @@
     groad:    { name: "Google", type: "g", gtype: "roadmap" },
     gsat:     { name: "航空",   type: "g", gtype: "hybrid" },
     gterr:    { name: "地形",   type: "g", gtype: "terrain" },
+    gblank:   { name: "白地図", type: "gsiv" },
     liberty:  { name: "標準",   type: "ofm", style: "https://tiles.openfreemap.org/styles/liberty" },
     bright:   { name: "明るい", type: "ofm", style: "https://tiles.openfreemap.org/styles/bright" },
     positron: { name: "淡色",   type: "ofm", style: "https://tiles.openfreemap.org/styles/positron" },
@@ -638,11 +642,32 @@
     relief:   { name: "標高",   type: "gsi", url: "https://cyberjapandata.gsi.go.jp/xyz/relief/{z}/{x}/{y}.png", maxNative: 15 },
     pale:     { name: "地理院", type: "gsi", url: "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", maxNative: 18 }
   };
-  // 右上のボタンで素早く回す候補。全種類は絞り込みタブの一覧から選ぶ
-  var QUICK_G = ["groad", "gsat", "liberty", "photo"];
-  var QUICK_N = ["liberty", "bright", "positron", "photo", "relief"];
-  function quickList() { return gKey() ? QUICK_G : QUICK_N; }
+  // 右上のボタンで素早く行き来する2枚。両方を地図に載せたままにして、
+  // 表示・非表示を切り替えるだけにするので一瞬で入れ替わる
+  var FAST = ["groad", "gblank"];
+  var QUICK_N = ["gblank", "liberty", "bright", "photo", "relief"];
   function gKey() { return (lsGet(GKEY) || "").trim(); }
+
+  // 地理院のベクトル白地図。公式のスタイルを読んで、タイルの指定だけ普通の形に直す
+  var GSI_STYLE_URL = "https://gsi-cyberjapan.github.io/optimal_bvmap/style/skeleton.json";
+  var GSI_PBF = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/{z}/{x}/{y}.pbf";
+  var gsiStyle = null;
+
+  function gsiBlankStyle() {
+    if (gsiStyle) return Promise.resolve(gsiStyle);
+    return fetch(GSI_STYLE_URL).then(function (r) {
+      if (!r.ok) throw new Error("白地図のスタイルを読めませんでした（HTTP " + r.status + "）");
+      return r.json();
+    }).then(function (j) {
+      // 元のスタイルは pmtiles 形式を指しているので、そのままでは別の部品が要る。
+      // 同じ中身が普通のタイルURLでも配られているので、そちらに差し替える
+      var key = Object.keys(j.sources || {})[0] || "v";
+      j.sources = j.sources || {};
+      j.sources[key] = { type: "vector", tiles: [GSI_PBF], minzoom: 4, maxzoom: 16 };
+      gsiStyle = j;
+      return j;
+    });
+  }
 
   // ---------- Googleマップの読み込み（キーがあるときだけ） ----------
   var googleReady = null, gFailMsg = "";
@@ -846,8 +871,10 @@
     });
 
     $("btnBase").addEventListener("click", function () {
-      var q = quickList(), i = q.indexOf(reqKey);
-      setBase(i < 0 ? q[0] : q[(i + 1) % q.length]);
+      // キーがあれば Google ⇄ 白地図 の2択。無ければ無料の地図を順に回す
+      if (gKey() && !gFailMsg) { setBase(reqKey === "groad" ? "gblank" : "groad"); return; }
+      var i = QUICK_N.indexOf(reqKey);
+      setBase(i < 0 ? QUICK_N[0] : QUICK_N[(i + 1) % QUICK_N.length]);
     });
     $("fbase").addEventListener("change", function () { setBase(this.value); });
     $("gkey").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gkeySave").click(); });
@@ -1140,7 +1167,7 @@
       }
     }
     // ベクトル地図が使えない環境では、地理院の淡色地図で代用する
-    if (def.type === "ofm" && !canVector()) {
+    if ((def.type === "ofm" || def.type === "gsiv") && !canVector()) {
       k = "pale"; def = BASES.pale;
       note = "この環境ではOpenFreeMapを表示できないため、地理院の地図にしています。";
     }
@@ -1148,6 +1175,15 @@
     baseKey = k;
     var seq = ++baseSeq;
     applyBaseUI(k, def, note);
+
+    // Googleと白地図の2枚は、両方載せたまま表示を切り替える（一瞬で入れ替わる）
+    if (FAST.indexOf(k) >= 0) {
+      dropPlain();
+      ensureFast(k);
+      showOnlyFast(k);
+      return;
+    }
+    dropFast();
 
     if (def.type === "g") {
       loadGoogle(gKey()).then(function () {
@@ -1188,11 +1224,94 @@
     if (baseLayer.bringToBack) baseLayer.bringToBack();
   }
 
+  // ---------- Googleと白地図の素早い切り替え ----------
+  var fastLayer = {};        // 作ったら captive に持っておき、作り直さない
+
+  function containerOf(l) {
+    try { return l.getContainer ? l.getContainer() : l._container; } catch (e) { return null; }
+  }
+
+  // 2枚とも地図に載せる。Googleはキーがあるときだけ
+  function ensureFast(want) {
+    if (gKey() && !gFailMsg && !fastLayer.groad) {
+      loadGoogle(gKey()).then(function () {
+        if (gFailMsg || fastLayer.groad) return;
+        fastLayer.groad = L.gridLayer.googleMutant({ type: BASES.groad.gtype, maxZoom: 21 });
+        fastLayer.groad.addTo(map);
+        fastLayer.groad.bringToBack();
+        showOnlyFast(baseKey);
+      }).catch(function (e) {
+        onGoogleFail(String(e && e.message || e));
+      });
+    } else if (fastLayer.groad && !map.hasLayer(fastLayer.groad)) {
+      fastLayer.groad.addTo(map);
+      fastLayer.groad.bringToBack();
+    }
+
+    if (!fastLayer.gblank) {
+      fastLayer.gblank = "loading";
+      gsiBlankStyle().then(function (st) {
+        var l = L.maplibreGL({ style: st, interactive: false, attributionControl: false });
+        fastLayer.gblank = l;
+        l.addTo(map);
+        if (l.bringToBack) l.bringToBack();
+        showOnlyFast(baseKey);
+      }).catch(function (e) {
+        fastLayer.gblank = null;
+        if (baseKey === "gblank") { showBaseNote(String(e && e.message || e)); setBase("positron"); }
+      });
+    } else if (fastLayer.gblank !== "loading" && !map.hasLayer(fastLayer.gblank)) {
+      fastLayer.gblank.addTo(map);
+      if (fastLayer.gblank.bringToBack) fastLayer.gblank.bringToBack();
+    }
+    if (want === "groad" && !gKey()) showOnlyFast("gblank");
+  }
+
+  // 見せたい1枚だけ不透明にする。消すのではなく透明にするので一瞬で戻せる
+  function showOnlyFast(k) {
+    FAST.forEach(function (fk) {
+      var l = fastLayer[fk];
+      if (!l || l === "loading") return;
+      var c = containerOf(l);
+      if (c) { c.style.opacity = (fk === k) ? "" : "0"; c.style.pointerEvents = "none"; }
+    });
+    // Googleのロゴと著作権表示は、Googleを見せているときだけ出す
+    var g = fastLayer.groad;
+    if (g) {
+      [g._logoContainer, g._attributionContainer].forEach(function (el) {
+        if (el) el.style.display = (k === "groad") ? "" : "none";
+      });
+    }
+    baseLayer = fastLayer[k] && fastLayer[k] !== "loading" ? fastLayer[k] : baseLayer;
+  }
+
+  // 2枚組から離れるときは地図から降ろす
+  function dropFast() {
+    FAST.forEach(function (fk) {
+      var l = fastLayer[fk];
+      if (l && l !== "loading" && map.hasLayer(l)) { try { map.removeLayer(l); } catch (e) { /* ignore */ } }
+    });
+  }
+
+  // 2枚組に入るときは、それ以外の背景を降ろす
+  function dropPlain() {
+    if (baseLayer && FAST.indexOf(baseKeyOf(baseLayer)) < 0 && map.hasLayer(baseLayer)) {
+      try { map.removeLayer(baseLayer); } catch (e) { /* ignore */ }
+      baseLayer = null;
+    }
+  }
+
+  function baseKeyOf(l) {
+    for (var i = 0; i < FAST.length; i++) if (fastLayer[FAST[i]] === l) return FAST[i];
+    return "";
+  }
+
   function applyBaseUI(k, def, note) {
     document.body.classList.toggle("gmap", def.type === "g");
     $("baseTxt").textContent = def.name;
     // Googleのときは、Google自身がロゴと著作権表示を出すのでこちらは空にする
-    $("credit").innerHTML = def.type === "ofm" ? OSM_CRED : (def.type === "gsi" ? GSI_CRED : "");
+    $("credit").innerHTML = def.type === "ofm" ? OSM_CRED :
+      (def.type === "gsi" || def.type === "gsiv" ? GSI_CRED : "");
     var s = $("fbase");
     if (s) s.value = k;
     var box = $("gkeyBox");
