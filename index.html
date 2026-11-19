@@ -1272,8 +1272,15 @@
     FAST.forEach(function (fk) {
       var l = fastLayer[fk];
       if (!l || l === "loading") return;
-      var c = containerOf(l);
-      if (c) { c.style.opacity = (fk === k) ? "" : "0"; c.style.pointerEvents = "none"; }
+      var on = (fk === k);
+      // タイル層はLeafletの作法で指定する。CSSを直接書くと、地図を動かした
+      // ときにLeafletが設定値へ戻してしまい、隠したはずの地図が出てくる
+      if (typeof l.setOpacity === "function") {
+        l.setOpacity(on ? 1 : 0);
+      } else {
+        var c = containerOf(l);
+        if (c) c.style.opacity = on ? "1" : "0";
+      }
     });
     // Googleのロゴと著作権表示は、Googleを見せているときだけ出す
     var g = fastLayer.groad;
