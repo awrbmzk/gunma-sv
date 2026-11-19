@@ -133,6 +133,7 @@
 
   .fab.on { background: var(--verm); color: #fff; border-color: var(--verm); }
   .fab.loc.on { background: var(--ai); border-color: var(--ai); }
+  .fab.gmapbtn { font-weight: 700; font-size: 23px; color: var(--ai); }
 
   #modebar {
     position: fixed;
@@ -434,6 +435,7 @@
   <div class="fab loc" id="btnLoc" title="現在地">➤</div>
   <div class="fab" id="btnRect" title="なぞって囲って消す（マウスなら右ドラッグでも）">➰</div>
   <div class="fab" id="btnEraser" title="消しゴムモード">✕</div>
+  <div class="fab gmapbtn" id="btnGmap" title="今見ている場所をGoogleマップで開く">G</div>
 </div>
 
 <div id="modebar" hidden><span id="modetxt"></span><button id="modeoff">やめる</button></div>
@@ -564,6 +566,10 @@
         <span><b>消しゴムモード</b><br><small style="color:var(--muted)">道をクリックするだけで次々消せます</small></span>
         <input type="checkbox" id="eraserchk">
       </label>
+      <div class="btnrow">
+        <button class="bigbtn ghost" id="btnGmap2">今の場所をGoogleマップで開く</button>
+      </div>
+      <p class="note">地図の中心と拡大率をそのまま引き継いで、Googleマップのサイト（アプリがあればアプリ）が開きます。右下の <b>G</b> ボタンでも同じことができます。</p>
       <div class="btnrow">
         <button class="bigbtn ghost" id="btnScreen">画面内をまとめて消す</button>
       </div>
@@ -961,6 +967,8 @@
       });
       if (b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]]);
     });
+    $("btnGmap").addEventListener("click", openHere);
+    $("btnGmap2").addEventListener("click", openHere);
     $("btnScreen").addEventListener("click", function () {
       var ids = inView.filter(function (o) { return !isDone(o.id); }).map(function (o) { return o.id; });
       if (!ids.length) { alert("画面内に消せる道がありません。"); return; }
@@ -1773,6 +1781,18 @@
     if (myPos) return myPos;
     if (map && map.getCenter()) return { lat: map.getCenter().lat, lng: map.getCenter().lng };
     return null;
+  }
+
+  // 今見ている場所（中心と拡大率）をGoogleマップのサイトで開く
+  function openHere() {
+    if (!map) return;
+    var c = map.getCenter();
+    var z = Math.max(1, Math.min(21, Math.round(map.getZoom())));
+    var u = "https://www.google.com/maps/@?api=1&map_action=map&center=" +
+      c.lat.toFixed(6) + "," + c.lng.toFixed(6) + "&zoom=" + z;
+    // 航空写真を見ているときは、向こうでも航空写真で開く
+    if (baseKey === "gsat" || baseKey === "photo") u += "&basemap=satellite";
+    window.open(u, "_blank", "noopener");
   }
 
   function openNav(o) {
