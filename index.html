@@ -555,10 +555,13 @@
       <div id="blankBox" hidden>
         <label class="f">白地図に出すもの</label>
         <div class="catgrid" id="blankCats"></div>
-        <p class="note">「道路」は拡大すると<b>両端を描いた太い線</b>、引くと<b>中心の1本線</b>に自動で切り替わります。幅3m未満の道だけは両端のデータが無いため、拡大しても1本線のままです。これが邪魔なときは「細い道（3m未満）」を外してください。</p>
+        <p class="note">「道路」は拡大すると<b>両端を描いた太い道</b>、引くと<b>中心の1本線</b>に自動で切り替わります。両端のデータが無い細い道だけは、拡大しても1本線のままです。これが邪魔なときは「<b>細い道（1本線のまま）</b>」を外すか、下の「太い道だけ」を押してください。</p>
         <div class="btnrow">
           <button class="bigbtn ghost" id="blankAll">すべて表示</button>
           <button class="bigbtn ghost" id="blankMin">道と水だけ</button>
+        </div>
+        <div class="btnrow">
+          <button class="bigbtn ghost" id="blankWide">太い道だけ</button>
         </div>
       </div>
       <div id="gkeyBox" hidden>
@@ -689,9 +692,9 @@
     ["記号",       ["記号"]],
     ["境界",       ["行政区画", "行政区画界線", "特定地区界"]],
     // 道路は拡大すると「ふち（両端の2本線）」、引くと「中心線（1本）」に自動で入れ替わる。
-    // 幅3m未満の道だけはふちのデータが無いので、拡大しても1本線のまま描かれる
+    // ふちのデータが無い細い道（RdCLのvt_flag17が1か2）は、拡大しても1本線のまま描かれる
     ["道路",             ["道路縁", "道路構成線", "道路_線"]],
-    ["細い道（3m未満）", ["道路_線2"]],
+    ["細い道（1本線のまま）", ["道路_線2"]],
     ["鉄道",       ["鉄道_線", "鉄道_線2", "軌道_線", "地下駅"]],
     ["建物",       ["建築物_外周線"]],
     ["交通構造物", ["交通トンネル口"]],
@@ -989,8 +992,10 @@
     buildBlankUI();
     $("blankAll").addEventListener("click", function () { setAllBlank(null); });
     $("blankMin").addEventListener("click", function () {
-      setAllBlank(["道路", "細い道（3m未満）", "鉄道", "水域", "河川", "海岸線"]);
+      setAllBlank(["道路", "細い道（1本線のまま）", "鉄道", "水域", "河川", "海岸線"]);
     });
+    // 拡大したときに両端が描かれる道（＝太く見える道）だけにする
+    $("blankWide").addEventListener("click", function () { setAllBlank(["道路"]); });
     $("gkey").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gkeySave").click(); });
     $("gkeySave").addEventListener("click", function () {
       var v = ($("gkey").value || "").trim();
