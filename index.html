@@ -555,14 +555,18 @@
       <div id="blankBox" hidden>
         <label class="f">白地図に出すもの</label>
         <div class="catgrid" id="blankCats"></div>
-        <label class="f">細い道を隠す　<b id="thinLbl">隠さない</b></label>
+        <label class="sw" style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px">
+          <span><b>徒歩道・階段を隠す</b><br><small style="color:var(--muted)">車で通れない道だけを消します</small></span>
+          <input type="checkbox" id="ffoot">
+        </label>
+        <label class="f">さらに道幅でも隠す　<b id="thinLbl">隠さない</b></label>
         <select id="fthin">
           <option value="0">隠さない（すべて出す）</option>
           <option value="1">3m未満を隠す</option>
           <option value="2">5.5m未満を隠す</option>
           <option value="3">13m未満を隠す</option>
         </select>
-        <p class="note">細い1本線が邪魔なときはここを上げてください。広域表示で道が消えないよう、<b>ズーム14より引くと絞り込みを止め</b>、<b>国道と都道府県道は幅に関係なく必ず表示</b>します。</p>
+        <p class="note">どちらも<b>全倍率で同じように</b>効くので、拡大・縮小で道が出たり消えたりしません。道幅で隠すほうは、山間部だと残る道がかなり減ります（国道・都道府県道は必ず残します）。</p>
         <div class="btnrow">
           <button class="bigbtn ghost" id="blankAll">すべて表示</button>
           <button class="bigbtn ghost" id="blankMin">道と水だけ</button>
@@ -718,13 +722,18 @@
     "2": ["3m未満", "3m-5.5m未満", "不明"],
     "3": ["3m未満", "3m-5.5m未満", "5.5m-13m未満", "不明"]
   };
-  // 山の中では広域に残る道も「3m未満」が多く、そのまま隠すと道が全部消えてしまう。
-  // そこで(1)この倍率より引いたら絞り込まない (2)国道・県道は幅に関係なく必ず出す
-  var THIN_FROM_Z = 14;
+  // 幅で隠すときも、国道・県道だけは必ず残す（点線国道など幅が不明な区間があるため）
   var MAIN_RD = ["高速自動車国道等", "主要道路", "国道", "都道府県道"];
+  // 徒歩道（破線で描かれる種別）と階段。車で通れないので、ここだけ消せると都合がよい
+  var FOOT_CODES = [2724, 2731, 2732, 2733, 2734];
+  var FKEY = "sv-hidefoot";
+  var hideFoot = lsGet(FKEY) === "1";
+  // 絞り込みは中心線だけでなく「ふち」にも同じものを掛ける。
+  // 片方だけだと、ズーム17で描き方が変わったときに道が出たり消えたりする
+  var RD_EDGE = "道路縁";
   var THIN_LBL = { "0": "隠さない", "1": "3m未満", "2": "5.5m未満", "3": "13m未満" };
-  var RD_LAYERS = ["道路_線", "道路_線2"];
-  var TKEY = "sv-thin";
+  var RD_LAYERS = ["道路_線", "道路_線2", RD_EDGE];
+  var TKEY = "sv-thin2";
   var thinLv = lsGet(TKEY) || "0";
   if (!THIN_SETS[thinLv]) thinLv = "0";
 
@@ -747,18 +756,25 @@
         try { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", v); } catch (e) { /* まだ無い層は飛ばす */ }
       });
     });
-    // 細い道は、レイヤーごと消すのではなく幅で絞り込む（太い道と同じ層に入っているため）
-    var hide = THIN_SETS[thinLv];
-    var f = null;
-    if (hide) {
-      f = ["step", ["zoom"], true, THIN_FROM_Z,
-        ["any",
-          ["in", ["get", "vt_rdctg"], ["literal", MAIN_RD]],
-          ["!", ["in", ["get", "vt_rnkwidth"], ["literal", hide]]]]];
-    }
+    // 道はレイヤーごと消すのではなく中身を絞り込む（太い道と細い道が同じ層に入っているため）
+    var f = roadFilter();
     RD_LAYERS.forEach(function (id) {
       try { if (m.getLayer(id)) m.setFilter(id, f); } catch (e) { /* ignore */ }
     });
+  }
+
+  // 中心線にも「ふち」にも同じ条件を掛けるので、倍率が変わっても同じ道が残る
+  function roadFilter() {
+    var parts = [];
+    if (hideFoot) parts.push(["!", ["in", ["get", "vt_code"], ["literal", FOOT_CODES]]]);
+    var hide = THIN_SETS[thinLv];
+    if (hide) {
+      parts.push(["any",
+        ["in", ["get", "vt_rdctg"], ["literal", MAIN_RD]],
+        ["!", ["in", ["get", "vt_rnkwidth"], ["literal", hide]]]]);
+    }
+    if (!parts.length) return null;
+    return parts.length === 1 ? parts[0] : ["all"].concat(parts);
   }
 
   function setThin(v) {
@@ -767,6 +783,14 @@
     var s = $("fthin"), lb = $("thinLbl");
     if (s) s.value = thinLv;
     if (lb) lb.textContent = THIN_LBL[thinLv];
+    applyBlankVis();
+  }
+
+  function setFoot(on) {
+    hideFoot = !!on;
+    lsSet(FKEY, hideFoot ? "1" : "0");
+    var c = $("ffoot");
+    if (c) c.checked = hideFoot;
     applyBlankVis();
   }
 
@@ -1034,13 +1058,15 @@
     $("fbase").addEventListener("change", function () { setBase(this.value); });
     buildBlankUI();
     setThin(thinLv);
+    setFoot(hideFoot);
     $("fthin").addEventListener("change", function () { setThin(this.value); });
-    $("blankAll").addEventListener("click", function () { setAllBlank(null); setThin("0"); });
+    $("ffoot").addEventListener("change", function () { setFoot(this.checked); });
+    $("blankAll").addEventListener("click", function () { setAllBlank(null); setThin("0"); setFoot(false); });
     $("blankMin").addEventListener("click", function () {
       setAllBlank(["道路", "鉄道", "水域", "河川", "海岸線"]);
     });
-    // 道だけにして、5.5m未満の細い道も落とす
-    $("blankWide").addEventListener("click", function () { setAllBlank(["道路"]); setThin("2"); });
+    // 道だけにして、車で通れない道も落とす（道幅では切らないので山の道も残る）
+    $("blankWide").addEventListener("click", function () { setAllBlank(["道路"]); setThin("0"); setFoot(true); });
     $("gkey").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gkeySave").click(); });
     $("gkeySave").addEventListener("click", function () {
       var v = ($("gkey").value || "").trim();
