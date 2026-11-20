@@ -49,6 +49,10 @@
   /* z-index:0 で地図の中に重なり順を閉じ込める。これが無いとLeafletの地図が上のバーを覆う */
   #map { position: absolute; inset: 0; background: #e8e0cc; z-index: 0; }
   .leaflet-container { background: #e8e0cc; font: inherit; }
+
+  /* 地理院のラスタ地図を白黒・高コントラストにして白地図に仕立てる。
+     等高線や色分けがほぼ飛んで、道と注記だけが残る */
+  .gsiwhite { filter: grayscale(1) brightness(1.22) contrast(1.5); }
   .leaflet-container a { color: var(--ai); }
 
   /* ---- 上部バー ---- */
@@ -305,21 +309,6 @@
   .sw span { font-size: 14px; }
   .sw input { width: 22px; height: 22px; accent-color: var(--ai); margin: 0; }
 
-  .catgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-top: 4px; }
-
-  .catgrid label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 2px;
-    font-size: 13.5px;
-    cursor: pointer;
-    min-width: 0;
-  }
-
-  .catgrid input { width: 19px; height: 19px; accent-color: var(--ai); margin: 0; flex: none; }
-  .catgrid span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
   .set select, .set input[type=range] {
     width: 100%;
     font: inherit;
@@ -533,7 +522,7 @@
       <select id="fbase">
         <optgroup label="切り替え用の2枚（右上のボタンで一瞬で入れ替わる）">
           <option value="groad">Googleマップ　地図</option>
-          <option value="gblank">地理院　白地図（ベクトル）</option>
+          <option value="gblank">地理院　白地図</option>
         </optgroup>
         <optgroup label="Googleマップ（APIキーが必要）">
           <option value="gsat">Googleマップ　航空写真</option>
@@ -552,18 +541,6 @@
         </optgroup>
       </select>
       <p class="note" id="baseNote" hidden></p>
-      <div id="blankBox" hidden>
-        <label class="f">白地図に出すもの</label>
-        <div class="catgrid" id="blankCats"></div>
-        <p class="note">「道路」は<b>道幅どおりの帯</b>で描きます（ふちが黒・中が白）。細い1本線にはなりません。どの倍率でも同じ描き方なので、拡大・縮小で出たり消えたりしません。</p>
-        <div class="btnrow">
-          <button class="bigbtn ghost" id="blankAll">すべて表示</button>
-          <button class="bigbtn ghost" id="blankMin">道と水だけ</button>
-        </div>
-        <div class="btnrow">
-          <button class="bigbtn ghost" id="blankWide">道だけ</button>
-        </div>
-      </div>
       <div id="gkeyBox" hidden>
         <label class="f">Google Maps APIキー</label>
         <input type="password" id="gkey" placeholder="AIza…" autocomplete="off" autocapitalize="off"
@@ -666,7 +643,7 @@
     groad:    { name: "Google", type: "g", gtype: "roadmap" },
     gsat:     { name: "航空",   type: "g", gtype: "hybrid" },
     gterr:    { name: "地形",   type: "g", gtype: "terrain" },
-    gblank:   { name: "白地図", type: "gsiv" },
+    gblank:   { name: "白地図", type: "gsi" },
     liberty:  { name: "標準",   type: "ofm", style: "https://tiles.openfreemap.org/styles/liberty" },
     bright:   { name: "明るい", type: "ofm", style: "https://tiles.openfreemap.org/styles/bright" },
     positron: { name: "淡色",   type: "ofm", style: "https://tiles.openfreemap.org/styles/positron" },
@@ -681,141 +658,8 @@
   var QUICK_N = ["gblank", "liberty", "bright", "photo", "relief"];
   function gKey() { return (lsGet(GKEY) || "").trim(); }
 
-  // 地理院のベクトル白地図。公式のスタイルを読んで、タイルの指定だけ普通の形に直す
-  var GSI_STYLE_URL = "https://gsi-cyberjapan.github.io/optimal_bvmap/style/skeleton.json";
-  var GSI_PBF = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/{z}/{x}/{y}.pbf";
-  var gsiStyle = null;
-
-  // 白地図のレイヤーを、地理院地図Vectorの表示項目と同じ分け方でまとめたもの
-  var BLANK_CATS = [
-    ["注記",       ["注記", "注記2", "注記3", "等高線数値部", "等深線数値部", "水部表記線point"]],
-    ["記号",       ["記号"]],
-    ["境界",       ["行政区画", "行政区画界線", "特定地区界"]],
-    // 道は、中心線から道幅どおりの帯を自前で描いた2層（ふち＝黒・なか＝白）で出す
-    ["道路",       ["道路_ふち", "道路_なか"]],
-    ["鉄道",       ["鉄道_線", "鉄道_線2", "軌道_線", "地下駅"]],
-    ["建物",       ["建築物_外周線"]],
-    ["交通構造物", ["交通トンネル口"]],
-    ["構造物",     ["構造物面", "構造物面の外周線", "構造物線", "送電線"]],
-    ["海岸線",     ["海岸線"]],
-    ["河川",       ["河川_線", "水涯線", "水部表記線line", "水部表記線polygon"]],
-    ["水域",       ["水域"]],
-    ["水部構造物", ["水部構造物面", "水部構造物線", "水部構造物線2"]],
-    ["等高線",     ["等高線", "等深線"]],
-    ["地形",       ["地形表記面", "地形表記面2", "地形表記線"]]
-  ];
-  // 地理院が用意している道の層。これらは全部外して、自前の2層に置き換える。
-  // 「道路縁」は道幅どおりの四角だが、詳細タイルにしか入っていないので拡大しないと出ない
-  var DROP_ROADS = ["道路_線", "道路_線2", "道路構成線", "道路縁"];
-
-  // 道の幅（m）。中心線が持っている幅員ランクから決める
-  var RD_WIDTH_M = ["match", ["get", "vt_rnkwidth"],
-    "19.5m以上", 20, "13m-19.5m未満", 16, "5.5m-13m未満", 9,
-    "3m-5.5m未満", 4.5, "3m未満", 2.5, 3];
-
-  // 実際の幅(m)を画面上の太さ(px)にする。ズーム16でほぼ1m=1pxなので1段ごとに倍。
-  // 引いて細くなったら中の白を消して黒い1本にする（薄い灰色になるのを防ぐ）。
-  // ズームの式は一番外側にしか書けないので、各段の値の中で計算しておく
-  function rdWidthPx(kind) {
-    var e = ["interpolate", ["exponential", 2], ["zoom"]];
-    for (var z = 8; z <= 20; z += 2) {
-      var m = ["*", RD_WIDTH_M, Math.pow(2, z - 16)];
-      e.push(z, kind === "edge" ? ["max", 2.4, ["+", m, 2.6]] : ["max", 0, ["-", m, 1]]);
-    }
-    return e;
-  }
-
-  var BVKEY = "sv-blankvis";
-  var blankVis = {};
-  try { blankVis = JSON.parse(lsGet(BVKEY) || "{}") || {}; } catch (e) { blankVis = {}; }
-
-  function blankOn(cat) { return blankVis[cat] !== false; }
-
-  // チェックの状態を地図に反映する。スタイルがまだなら、読み終わってから呼び直される
-  function applyBlankVis() {
-    var l = fastLayer.gblank;
-    if (!l || l === "loading" || !l.getMaplibreMap) return;
-    var m;
-    try { m = l.getMaplibreMap(); } catch (e) { return; }
-    if (!m || !m.getLayer) return;
-    BLANK_CATS.forEach(function (c) {
-      var v = blankOn(c[0]) ? "visible" : "none";
-      c[1].forEach(function (id) {
-        try { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", v); } catch (e) { /* まだ無い層は飛ばす */ }
-      });
-    });
-  }
-
-  function buildBlankUI() {
-    var box = $("blankCats");
-    if (!box || box.childNodes.length) return;
-    BLANK_CATS.forEach(function (c) {
-      var lab = document.createElement("label");
-      var inp = document.createElement("input");
-      inp.type = "checkbox";
-      inp.checked = blankOn(c[0]);
-      inp.addEventListener("change", function () {
-        blankVis[c[0]] = this.checked;
-        lsSet(BVKEY, JSON.stringify(blankVis));
-        applyBlankVis();
-      });
-      var sp = document.createElement("span");
-      sp.textContent = c[0];
-      lab.appendChild(inp);
-      lab.appendChild(sp);
-      box.appendChild(lab);
-    });
-  }
-
-  function setAllBlank(list) {
-    BLANK_CATS.forEach(function (c) { blankVis[c[0]] = !list || list.indexOf(c[0]) >= 0; });
-    lsSet(BVKEY, JSON.stringify(blankVis));
-    var ins = $("blankCats").querySelectorAll("input");
-    BLANK_CATS.forEach(function (c, i) { if (ins[i]) ins[i].checked = blankOn(c[0]); });
-    applyBlankVis();
-  }
-
-  function gsiBlankStyle() {
-    if (gsiStyle) return Promise.resolve(gsiStyle);
-    return fetch(GSI_STYLE_URL).then(function (r) {
-      if (!r.ok) throw new Error("白地図のスタイルを読めませんでした（HTTP " + r.status + "）");
-      return r.json();
-    }).then(function (j) {
-      // 元のスタイルは pmtiles 形式を指しているので、そのままでは別の部品が要る。
-      // 同じ中身が普通のタイルURLでも配られているので、そちらに差し替える
-      var key = Object.keys(j.sources || {})[0] || "v";
-      j.sources = j.sources || {};
-      j.sources[key] = { type: "vector", tiles: [GSI_PBF], minzoom: 4, maxzoom: 16 };
-      // 道は地理院の層を全部外して、中心線から「道幅どおりの帯」を自前で描く。
-      // こうすると詳細タイルを待たずに済むので、引いた状態でも同じ見た目で出る
-      var src = null, srcLayer = null, at = -1;
-      j.layers.forEach(function (l, i) {
-        if (l.id === "道路_線") { src = l.source; srcLayer = l["source-layer"]; at = i; }
-      });
-      j.layers = j.layers.filter(function (l, i) {
-        if (DROP_ROADS.indexOf(l.id) >= 0) { if (i < at) at--; return false; }
-        return true;
-      });
-      if (src) {
-        var lay = { "line-cap": "round", "line-join": "round" };
-        j.layers.splice(Math.max(0, at), 0,
-          { id: "道路_ふち", type: "line", source: src, "source-layer": srcLayer, layout: lay,
-            paint: { "line-color": "rgba(0,0,0,1)", "line-width": rdWidthPx("edge") } },
-          { id: "道路_なか", type: "line", source: src, "source-layer": srcLayer, layout: lay,
-            paint: { "line-color": "rgba(255,255,255,1)", "line-width": rdWidthPx("fill") } });
-      }
-      j.layers.forEach(function (l) {
-        if (l.id === "鉄道_線") {
-          // 引いたときの線が髪の毛みたいに細くて見えないので、縮尺に応じて太くする
-          l.paint = l.paint || {};
-          l.paint["line-width"] = ["interpolate", ["linear"], ["zoom"],
-            8, 0.8, 11, 1.1, 13, 1.5, 15, 2.1, 16.9, 2.6];
-        }
-      });
-      gsiStyle = j;
-      return j;
-    });
-  }
+  // 白地図のもとにする地理院のラスタ地図。CSSで白黒・高コントラストにして白地図にする
+  var GSI_WHITE = "https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png";
 
   // ---------- Googleマップの読み込み（キーがあるときだけ） ----------
   var googleReady = null, gFailMsg = "";
@@ -1025,12 +869,6 @@
       setBase(i < 0 ? QUICK_N[0] : QUICK_N[(i + 1) % QUICK_N.length]);
     });
     $("fbase").addEventListener("change", function () { setBase(this.value); });
-    buildBlankUI();
-    $("blankAll").addEventListener("click", function () { setAllBlank(null); });
-    $("blankMin").addEventListener("click", function () {
-      setAllBlank(["道路", "鉄道", "水域", "河川", "海岸線"]);
-    });
-    $("blankWide").addEventListener("click", function () { setAllBlank(["道路"]); });
     $("gkey").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gkeySave").click(); });
     $("gkeySave").addEventListener("click", function () {
       var v = ($("gkey").value || "").trim();
@@ -1323,7 +1161,7 @@
       }
     }
     // ベクトル地図が使えない環境では、地理院の淡色地図で代用する
-    if ((def.type === "ofm" || def.type === "gsiv") && !canVector()) {
+    if (def.type === "ofm" && !canVector()) {
       k = "pale"; def = BASES.pale;
       note = "この環境ではOpenFreeMapを表示できないため、地理院の地図にしています。";
     }
@@ -1405,26 +1243,18 @@
     }
 
     if (!fastLayer.gblank) {
-      fastLayer.gblank = "loading";
-      gsiBlankStyle().then(function (st) {
-        var l = L.maplibreGL({ style: st, interactive: false, attributionControl: false });
-        fastLayer.gblank = l;
-        l.addTo(map);
-        if (l.bringToBack) l.bringToBack();
-        // スタイルが整ってから表示項目を反映する
-        try {
-          var gm = l.getMaplibreMap();
-          if (gm) { gm.on("styledata", applyBlankVis); gm.once("load", applyBlankVis); }
-        } catch (e) { /* ignore */ }
-        applyBlankVis();
-        showOnlyFast(baseKey);
-      }).catch(function (e) {
-        fastLayer.gblank = null;
-        if (baseKey === "gblank") { showBaseNote(String(e && e.message || e)); setBase("positron"); }
+      // 白地図は地理院のラスタ地図を白黒化して作る。ベクトルタイルと違って
+      // 細い道まで最初から絵に描き込まれているので、引いても道が消えない
+      fastLayer.gblank = L.tileLayer(GSI_WHITE, {
+        className: "gsiwhite", maxNativeZoom: 18, maxZoom: 21, minZoom: 5,
+        detectRetina: false, crossOrigin: true
       });
-    } else if (fastLayer.gblank !== "loading" && !map.hasLayer(fastLayer.gblank)) {
       fastLayer.gblank.addTo(map);
-      if (fastLayer.gblank.bringToBack) fastLayer.gblank.bringToBack();
+      fastLayer.gblank.bringToBack();
+      showOnlyFast(baseKey);
+    } else if (!map.hasLayer(fastLayer.gblank)) {
+      fastLayer.gblank.addTo(map);
+      fastLayer.gblank.bringToBack();
     }
     if (want === "groad" && !gKey()) showOnlyFast("gblank");
   }
@@ -1479,14 +1309,11 @@
     document.body.classList.toggle("gmap", def.type === "g");
     $("baseTxt").textContent = def.name;
     // Googleのときは、Google自身がロゴと著作権表示を出すのでこちらは空にする
-    $("credit").innerHTML = def.type === "ofm" ? OSM_CRED :
-      (def.type === "gsi" || def.type === "gsiv" ? GSI_CRED : "");
+    $("credit").innerHTML = def.type === "ofm" ? OSM_CRED : (def.type === "gsi" ? GSI_CRED : "");
     var s = $("fbase");
     if (s) s.value = k;
     var box = $("gkeyBox");
     if (box) box.hidden = !(wantGoogle || gFailMsg);
-    var bb = $("blankBox");
-    if (bb) bb.hidden = (k !== "gblank");
     showBaseNote(note);
     lsSet(BKEY, k);
   }
