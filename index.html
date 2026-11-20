@@ -555,7 +555,14 @@
       <div id="blankBox" hidden>
         <label class="f">白地図に出すもの</label>
         <div class="catgrid" id="blankCats"></div>
-        <p class="note">「<b>細い1本線の道</b>」を外すと、細い道が<b>どの倍率でも</b>出なくなります（拡大時の1本線を消し、引いたときも太い道だけに絞り込みます）。下の「太い道だけ」を押せば一発です。なお太い道は、拡大すると両端を描いた帯に、引くと中心の1本線に自動で切り替わります。</p>
+        <label class="f">細い道を隠す　<b id="thinLbl">隠さない</b></label>
+        <select id="fthin">
+          <option value="0">隠さない（すべて出す）</option>
+          <option value="1">3m未満を隠す</option>
+          <option value="2">5.5m未満を隠す</option>
+          <option value="3">13m未満を隠す</option>
+        </select>
+        <p class="note">道の<b>幅のデータ</b>で絞り込むので、<b>どの倍率でも</b>効きます。細い1本線が邪魔なときはここを上げてください。幅が「不明」の道もまとめて隠します。</p>
         <div class="btnrow">
           <button class="bigbtn ghost" id="blankAll">すべて表示</button>
           <button class="bigbtn ghost" id="blankMin">道と水だけ</button>
@@ -691,10 +698,8 @@
     ["注記",       ["注記", "注記2", "注記3", "等高線数値部", "等深線数値部", "水部表記線point"]],
     ["記号",       ["記号"]],
     ["境界",       ["行政区画", "行政区画界線", "特定地区界"]],
-    // 道路は拡大すると「ふち（両端の2本線）」、引くと「中心線（1本）」に自動で入れ替わる。
-    // ふちのデータが無い細い道（RdCLのvt_flag17が1か2）は、拡大しても1本線のまま描かれる
-    ["道路",             ["道路縁", "道路構成線", "道路_線"]],
-    ["細い1本線の道", ["道路_線2"]],
+    // 道路は拡大すると「ふち（両端の2本線）」、引くと「中心線（1本）」に自動で入れ替わる
+    ["道路",       ["道路縁", "道路構成線", "道路_線", "道路_線2"]],
     ["鉄道",       ["鉄道_線", "鉄道_線2", "軌道_線", "地下駅"]],
     ["建物",       ["建築物_外周線"]],
     ["交通構造物", ["交通トンネル口"]],
@@ -706,7 +711,20 @@
     ["等高線",     ["等高線", "等深線"]],
     ["地形",       ["地形表記面", "地形表記面2", "地形表記線"]]
   ];
-  var THIN_CAT = "細い1本線の道";
+  // 細い道を隠す強さ。道が持つ幅員ランク(vt_rnkwidth)で絞る。
+  // この属性はどの倍率のタイルにも入っているので、引いても拡大しても同じように効く
+  var THIN_SETS = {
+    "0": null,
+    "1": ["3m未満", "不明"],
+    "2": ["3m未満", "3m-5.5m未満", "不明"],
+    "3": ["3m未満", "3m-5.5m未満", "5.5m-13m未満", "不明"]
+  };
+  var THIN_LBL = { "0": "隠さない", "1": "3m未満", "2": "5.5m未満", "3": "13m未満" };
+  var RD_LAYERS = ["道路_線", "道路_線2"];
+  var TKEY = "sv-thin";
+  var thinLv = lsGet(TKEY) || "0";
+  if (!THIN_SETS[thinLv]) thinLv = "0";
+
   var BVKEY = "sv-blankvis";
   var blankVis = {};
   try { blankVis = JSON.parse(lsGet(BVKEY) || "{}") || {}; } catch (e) { blankVis = {}; }
@@ -726,14 +744,21 @@
         try { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", v); } catch (e) { /* まだ無い層は飛ばす */ }
       });
     });
-    // 引いた状態の道は「道路_線」1枚に全部入っているので、消すのではなく絞り込む。
-    // vt_flag17 が 1 か 2 の道は拡大してもふちが描かれない＝細い道なので、それを除く
-    try {
-      if (m.getLayer("道路_線")) {
-        m.setFilter("道路_線", blankOn(THIN_CAT) ? null
-          : ["!", ["in", ["get", "vt_flag17"], ["literal", [1, 2]]]]);
-      }
-    } catch (e) { /* ignore */ }
+    // 細い道は、レイヤーごと消すのではなく幅で絞り込む（太い道と同じ層に入っているため）
+    var hide = THIN_SETS[thinLv];
+    var f = hide ? ["!", ["in", ["get", "vt_rnkwidth"], ["literal", hide]]] : null;
+    RD_LAYERS.forEach(function (id) {
+      try { if (m.getLayer(id)) m.setFilter(id, f); } catch (e) { /* ignore */ }
+    });
+  }
+
+  function setThin(v) {
+    thinLv = THIN_SETS[v] !== undefined ? v : "0";
+    lsSet(TKEY, thinLv);
+    var s = $("fthin"), lb = $("thinLbl");
+    if (s) s.value = thinLv;
+    if (lb) lb.textContent = THIN_LBL[thinLv];
+    applyBlankVis();
   }
 
   function buildBlankUI() {
@@ -999,12 +1024,14 @@
     });
     $("fbase").addEventListener("change", function () { setBase(this.value); });
     buildBlankUI();
-    $("blankAll").addEventListener("click", function () { setAllBlank(null); });
+    setThin(thinLv);
+    $("fthin").addEventListener("change", function () { setThin(this.value); });
+    $("blankAll").addEventListener("click", function () { setAllBlank(null); setThin("0"); });
     $("blankMin").addEventListener("click", function () {
-      setAllBlank(["道路", THIN_CAT, "鉄道", "水域", "河川", "海岸線"]);
+      setAllBlank(["道路", "鉄道", "水域", "河川", "海岸線"]);
     });
-    // 拡大したときに両端が描かれる道（＝太く見える道）だけにする
-    $("blankWide").addEventListener("click", function () { setAllBlank(["道路"]); });
+    // 道だけにして、5.5m未満の細い道も落とす
+    $("blankWide").addEventListener("click", function () { setAllBlank(["道路"]); setThin("2"); });
     $("gkey").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gkeySave").click(); });
     $("gkeySave").addEventListener("click", function () {
       var v = ($("gkey").value || "").trim();
