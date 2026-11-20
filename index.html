@@ -555,6 +555,7 @@
       <div id="blankBox" hidden>
         <label class="f">白地図に出すもの</label>
         <div class="catgrid" id="blankCats"></div>
+        <p class="note">「道路」は拡大すると<b>両端を描いた太い線</b>、引くと<b>中心の1本線</b>に自動で切り替わります。幅3m未満の道だけは両端のデータが無いため、拡大しても1本線のままです。これが邪魔なときは「細い道（3m未満）」を外してください。</p>
         <div class="btnrow">
           <button class="bigbtn ghost" id="blankAll">すべて表示</button>
           <button class="bigbtn ghost" id="blankMin">道と水だけ</button>
@@ -687,7 +688,10 @@
     ["注記",       ["注記", "注記2", "注記3", "等高線数値部", "等深線数値部", "水部表記線point"]],
     ["記号",       ["記号"]],
     ["境界",       ["行政区画", "行政区画界線", "特定地区界"]],
-    ["道路",       ["道路_線", "道路_線2", "道路縁", "道路構成線"]],
+    // 道路は拡大すると「ふち（両端の2本線）」、引くと「中心線（1本）」に自動で入れ替わる。
+    // 幅3m未満の道だけはふちのデータが無いので、拡大しても1本線のまま描かれる
+    ["道路",             ["道路縁", "道路構成線", "道路_線"]],
+    ["細い道（3m未満）", ["道路_線2"]],
     ["鉄道",       ["鉄道_線", "鉄道_線2", "軌道_線", "地下駅"]],
     ["建物",       ["建築物_外周線"]],
     ["交通構造物", ["交通トンネル口"]],
@@ -760,6 +764,15 @@
       var key = Object.keys(j.sources || {})[0] || "v";
       j.sources = j.sources || {};
       j.sources[key] = { type: "vector", tiles: [GSI_PBF], minzoom: 4, maxzoom: 16 };
+      // 引いたときの道が髪の毛みたいに細くて見えないので、縮尺に応じて太くする。
+      // 色の指定（幅が不明な道を透明にする分岐）はそのまま残す
+      j.layers.forEach(function (l) {
+        if (l.id === "道路_線" || l.id === "鉄道_線") {
+          l.paint = l.paint || {};
+          l.paint["line-width"] = ["interpolate", ["linear"], ["zoom"],
+            8, 0.8, 11, 1.1, 13, 1.5, 15, 2.1, 16.9, 2.6];
+        }
+      });
       gsiStyle = j;
       return j;
     });
@@ -975,7 +988,9 @@
     $("fbase").addEventListener("change", function () { setBase(this.value); });
     buildBlankUI();
     $("blankAll").addEventListener("click", function () { setAllBlank(null); });
-    $("blankMin").addEventListener("click", function () { setAllBlank(["道路", "鉄道", "水域", "河川", "海岸線"]); });
+    $("blankMin").addEventListener("click", function () {
+      setAllBlank(["道路", "細い道（3m未満）", "鉄道", "水域", "河川", "海岸線"]);
+    });
     $("gkey").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gkeySave").click(); });
     $("gkeySave").addEventListener("click", function () {
       var v = ($("gkey").value || "").trim();
