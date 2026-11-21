@@ -707,6 +707,11 @@
   // 地理院が用意している道の層。全部外して、自前の2層に置き換える
   var DROP_ROADS = ["道路_線", "道路_線2", "道路構成線", "道路縁"];
 
+  // 徒歩道・階段の種別コード。地理院の地図でも破線や細い1本線で描かれ、
+  // 道幅のデータを持たない。車で通れないので帯では描かない
+  var FOOT_CODES = [2721, 2722, 2723, 2724, 2731, 2732, 2733, 2734];
+  var RD_FILTER = ["!", ["in", ["get", "vt_code"], ["literal", FOOT_CODES]]];
+
   // 道の幅（m）。中心線が持っている幅員ランクから決める
   var RD_WIDTH_M = ["match", ["get", "vt_rnkwidth"],
     "19.5m以上", 20, "13m-19.5m未満", 16, "5.5m-13m未満", 9,
@@ -798,8 +803,10 @@
         var lay = { "line-cap": "round", "line-join": "round" };
         j.layers.splice(Math.max(0, at), 0,
           { id: "道路_ふち", type: "line", source: src, "source-layer": srcLayer, layout: lay,
+            filter: RD_FILTER,
             paint: { "line-color": "rgba(0,0,0,1)", "line-width": rdWidthPx("edge") } },
           { id: "道路_なか", type: "line", source: src, "source-layer": srcLayer, layout: lay,
+            filter: RD_FILTER,
             paint: { "line-color": "rgba(255,255,255,1)", "line-width": rdWidthPx("fill") } });
       }
       j.layers.forEach(function (l) {
