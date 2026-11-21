@@ -756,6 +756,7 @@
 
   // チェックの状態を地図に反映する。スタイルがまだなら、読み終わってから呼び直される
   function applyBlankVis() {
+    applyBaseRoads();
     var l = fastLayer.gblank;
     if (!l || l === "loading" || !l.getMaplibreMap) return;
     var m;
@@ -938,6 +939,8 @@
     }).then(function (j) {
       D = j;
       hasElev = j.hasElev === 1;
+      // 幅員ランクの並びはデータ側で決まるので、文字で引いてメートルに直す
+      wdM = (j.widths || []).map(function (s) { return W_M[s] || 3; });
       var heavy = lsGet(HEAVY) === "1";
       var n = 0;
       j.roads.forEach(function (r) {
@@ -1008,6 +1011,11 @@
       preferCanvas: true             // 道を何百本も描くのでキャンバスのほうが速い
     });
     // 現在地の印は道より上に出したいので、専用の層を作る
+    // 白地図の下地の道。背景タイルの上、青線より下
+    map.createPane(BR_PANE);
+    map.getPane(BR_PANE).style.zIndex = 240;
+    map.getPane(BR_PANE).style.pointerEvents = "none";
+    L.DomUtil.addClass(map.getPane(BR_PANE), "leaflet-zoom-hide");
     // ストリートビューの青線は、背景の上・赤い道の下に置く。
     // 引くとGoogleは青を太い帯で描くので、そのままだと下の道を塗りつぶして
     // しまう。乗算で重ねると、青は青のまま、下の黒い道はそのまま残る
@@ -1377,6 +1385,7 @@
       ensureFast(k);
       showOnlyFast(k);
       applySvLine();
+      applyBaseRoads();
       return;
     }
     dropFast();
@@ -1419,6 +1428,7 @@
     baseLayer.addTo(map);
     if (baseLayer.bringToBack) baseLayer.bringToBack();
     applySvLine();
+    applyBaseRoads();
   }
 
   // ---------- Googleと白地図の素早い切り替え ----------
@@ -1516,6 +1526,136 @@
   function baseKeyOf(l) {
     for (var i = 0; i < FAST.length; i++) if (fastLayer[FAST[i]] === l) return FAST[i];
     return "";
+  }
+
+  // ---------- 白地図の下地になる道 ----------
+  // 地理院の「最適化ベクトルタイル」は、林道のような細い道をそもそも持って
+  // いない。赤い道と同じ道路中心線のデータから同じ帯のかたちで下地を描き、
+  // 赤い道の下には必ず道があるようにする。引いても消えない
+  var W_M = { "19.5m以上": 20, "13m-19.5m未満": 16, "5.5m-13m未満": 9, "3m-5.5m未満": 4.5, "3m未満": 2.5 };
+  var wdM = [];                       // D.widths の添字 → メートル
+  var BR_PANE = "roadPane";
+  var BR_CAP = 22000;                 // 引きすぎたときに描く本数の上限
+
+  // 引くほど本数が増えるので、短い道から順に落とす
+  function brMinLen(z) {
+    if (z >= 14) return 0;
+    if (z >= 13) return 60;
+    if (z >= 12) return 150;
+    return 400;
+  }
+  // 実寸どおりだと引いたとき細くなりすぎるので、最低限の太さを残す
+  function brMinFill(z) { return z >= 14 ? 1.6 : (z >= 13 ? 1.2 : (z >= 12 ? 0.9 : 0.7)); }
+
+  var BaseRoads = L.Layer.extend({
+    onAdd: function (map) {
+      this._map = map;
+      this._c = L.DomUtil.create("canvas");
+      this._c.style.position = "absolute";
+      this._ctx = this._c.getContext("2d");
+      map.getPane(BR_PANE).appendChild(this._c);
+      map.on("moveend zoomend resize", this.redraw, this);
+      this.redraw();
+    },
+
+    onRemove: function (map) {
+      map.off("moveend zoomend resize", this.redraw, this);
+      if (this._c && this._c.parentNode) this._c.parentNode.removeChild(this._c);
+      this._c = null;
+    },
+
+    redraw: function () {
+      var map = this._map;
+      if (!map || !this._c) return;
+      var size = map.getSize();
+      var padX = Math.round(size.x * 0.12), padY = Math.round(size.y * 0.12);
+      var tl = map.containerPointToLayerPoint([0, 0]).subtract(L.point(padX, padY));
+      var w = size.x + padX * 2, h = size.y + padY * 2;
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      L.DomUtil.setPosition(this._c, tl);
+      if (this._c.width !== Math.round(w * dpr)) this._c.width = Math.round(w * dpr);
+      if (this._c.height !== Math.round(h * dpr)) this._c.height = Math.round(h * dpr);
+      this._c.style.width = w + "px";
+      this._c.style.height = h + "px";
+      var ctx = this._ctx;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      this._paint(ctx, tl);
+    },
+
+    _paint: function (ctx, tl) {
+      var map = this._map, z = map.getZoom();
+      if (!roads.length) return;
+      var b = map.getBounds().pad(0.15);
+      var south = b.getSouth(), west = b.getWest(), north = b.getNorth(), east = b.getEast();
+      var minLen = brMinLen(z), seen = {}, hit = [];
+      for (var gy = Math.floor(south / GS); gy <= Math.floor(north / GS); gy++) {
+        for (var gx = Math.floor(west / GS); gx <= Math.floor(east / GS); gx++) {
+          var cell = grid[gy + ":" + gx];
+          if (!cell) continue;
+          for (var i = 0; i < cell.length; i++) {
+            var idx = cell[i];
+            if (seen[idx]) continue;
+            seen[idx] = 1;
+            var o = roads[idx];
+            if (o.len < minLen) continue;
+            if (o.b[0] > north || o.b[2] < south || o.b[1] > east || o.b[3] < west) continue;
+            hit.push(o);
+          }
+        }
+      }
+      if (hit.length > BR_CAP) {
+        hit.sort(function (a, c) { return c.len - a.len; });
+        hit.length = BR_CAP;
+      }
+
+      // 幅ごとにまとめて、画面上の位置を1回だけ計算する
+      var D2R = Math.PI / 180, scale = 256 * Math.pow(2, z);
+      var po = map.getPixelOrigin(), ox = po.x + tl.x, oy = po.y + tl.y;
+      var mpp = 40075016.686 * Math.cos(map.getCenter().lat * D2R) / Math.pow(2, z + 8);
+      var minF = brMinFill(z), group = {};
+      for (var k = 0; k < hit.length; k++) {
+        var r = hit[k], m = wdM[r.wd] || 3;
+        var g = group[m] || (group[m] = []);
+        var p = r.pts, run = new Array(p.length * 2);
+        for (var j = 0; j < p.length; j++) {
+          var sn = Math.sin(p[j][1] * D2R);
+          run[j * 2] = (p[j][0] + 180) / 360 * scale - ox;
+          run[j * 2 + 1] = (0.5 - Math.log((1 + sn) / (1 - sn)) / (4 * Math.PI)) * scale - oy;
+        }
+        g.push(run);
+      }
+
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      var keys = Object.keys(group);
+      for (var pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,1)" : "rgba(255,255,255,1)";
+        for (var q = 0; q < keys.length; q++) {
+          var fill = Math.max(minF, (+keys[q]) / mpp - 1);
+          ctx.lineWidth = pass === 0 ? fill + 3.2 : fill;
+          ctx.beginPath();
+          var arr = group[keys[q]];
+          for (var a = 0; a < arr.length; a++) {
+            var run2 = arr[a];
+            ctx.moveTo(run2[0], run2[1]);
+            for (var t = 2; t < run2.length; t += 2) ctx.lineTo(run2[t], run2[t + 1]);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+  });
+
+  var baseRoads = null;
+
+  // 白地図のときだけ、しかも「道路」を出す設定のときだけ敷く
+  function applyBaseRoads() {
+    if (!map) return;
+    var want = (baseKey === "gblank") && blankOn("道路");
+    if (want && !baseRoads) { baseRoads = new BaseRoads(); baseRoads.addTo(map); }
+    else if (!want && baseRoads) { map.removeLayer(baseRoads); baseRoads = null; }
+    else if (want && baseRoads) baseRoads.redraw();
   }
 
   // ---------- ストリートビューのある道（青線） ----------
