@@ -1008,10 +1008,13 @@
       preferCanvas: true             // 道を何百本も描くのでキャンバスのほうが速い
     });
     // 現在地の印は道より上に出したいので、専用の層を作る
-    // ストリートビューの青線は、背景の上・赤い道の下に置く
+    // ストリートビューの青線は、背景の上・赤い道の下に置く。
+    // 引くとGoogleは青を太い帯で描くので、そのままだと下の道を塗りつぶして
+    // しまう。乗算で重ねると、青は青のまま、下の黒い道はそのまま残る
     map.createPane("svPane");
     map.getPane("svPane").style.zIndex = 250;
     map.getPane("svPane").style.pointerEvents = "none";
+    map.getPane("svPane").style.mixBlendMode = "multiply";
     map.createPane("mePane");
     map.getPane("mePane").style.zIndex = 650;
     map.getPane("mePane").style.pointerEvents = "none";
