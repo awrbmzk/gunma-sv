@@ -552,6 +552,10 @@
         </optgroup>
       </select>
       <p class="note" id="baseNote" hidden></p>
+      <label class="sw" style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px">
+        <span><b>SVの青い線を出す</b><br><small style="color:var(--muted)">Googleマップを表示しているときだけ出ます</small></span>
+        <input type="checkbox" id="svchk">
+      </label>
       <div id="blankBox" hidden>
         <label class="f">白地図に出すもの</label>
         <div class="catgrid" id="blankCats"></div>
@@ -706,6 +710,28 @@
 
   // 地理院が用意している道の層。全部外して、自前の2層に置き換える
   var DROP_ROADS = ["道路_線", "道路_線2", "道路構成線", "道路縁"];
+
+  // GoogleのSV範囲（青い線）。Googleの地図エンジンが描くものなので、
+  // Googleマップを下敷きにしているときしか出せない
+  var SVLKEY = "sv-svline";
+  var svLine = lsGet(SVLKEY) === "1";
+
+  function setSvLine(on) {
+    svLine = !!on;
+    lsSet(SVLKEY, svLine ? "1" : "0");
+    var c = $("svchk");
+    if (c) c.checked = svLine;
+    applySvLine();
+  }
+
+  function applySvLine() {
+    var g = fastLayer.groad;
+    if (!g || !g.addGoogleLayer) return;
+    try {
+      if (svLine) g.addGoogleLayer("StreetViewCoverageLayer");
+      else g.removeGoogleLayer("StreetViewCoverageLayer");
+    } catch (e) { /* 古いブラウザなどで失敗しても地図自体は動かす */ }
+  }
 
   // 徒歩道・階段の種別コード。地理院の地図でも破線や細い1本線で描かれ、
   // 道幅のデータを持たない。車で通れないので帯では描かない
@@ -1029,6 +1055,8 @@
       setBase(i < 0 ? QUICK_N[0] : QUICK_N[(i + 1) % QUICK_N.length]);
     });
     $("fbase").addEventListener("change", function () { setBase(this.value); });
+    setSvLine(svLine);
+    $("svchk").addEventListener("change", function () { setSvLine(this.checked); });
     buildBlankUI();
     $("blankAll").addEventListener("click", function () { setAllBlank(null); });
     $("blankMin").addEventListener("click", function () {
@@ -1398,6 +1426,7 @@
         fastLayer.groad = L.gridLayer.googleMutant({ type: BASES.groad.gtype, maxZoom: 21 });
         fastLayer.groad.addTo(map);
         fastLayer.groad.bringToBack();
+        applySvLine();
         showOnlyFast(baseKey);
       }).catch(function (e) {
         onGoogleFail(String(e && e.message || e));
