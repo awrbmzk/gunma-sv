@@ -552,10 +552,8 @@
         </optgroup>
       </select>
       <p class="note" id="baseNote" hidden></p>
-      <label class="sw" style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px">
-        <span><b>SVの青い線を出す</b><br><small style="color:var(--muted)">Googleマップを表示しているときだけ出ます</small></span>
-        <input type="checkbox" id="svchk">
-      </label>
+      <label class="sw" style="margin-top:6px"><span>ストリートビューがある道を青で重ねる<br><small style="color:var(--muted)">Google公式の範囲表示。背景がGoogleマップか白地図のときに出せます</small></span><input type="checkbox" id="svchk"></label>
+      <p class="note" id="svNote" hidden></p>
       <div id="blankBox" hidden>
         <label class="f">白地図に出すもの</label>
         <div class="catgrid" id="blankCats"></div>
@@ -640,6 +638,7 @@
   "use strict";
   var DKEY = "sv-done-v1", BKEY = "sv-base2", HEAVY = "sv-load-heavy", VKEY = "sv-view", MKEY = "sv-marks-v2", SKEY = "sv-sync";
   var PKEY = "sv-nopanel", NKEY = "sv-navmode", NGKEY = "sv-navgo", GKEY = "sv-key";
+  var SVKEY = "sv-svline";
   var MODE_JA = { driving: "車", bicycling: "自転車", walking: "徒歩", transit: "公共交通" };
   var DATA_URL = "gunma_sv_mobile.json";
   var map, baseLayer, meRenderer, meMarker, meCircle, sel = null;
@@ -710,28 +709,6 @@
 
   // 地理院が用意している道の層。全部外して、自前の2層に置き換える
   var DROP_ROADS = ["道路_線", "道路_線2", "道路構成線", "道路縁"];
-
-  // GoogleのSV範囲（青い線）。Googleの地図エンジンが描くものなので、
-  // Googleマップを下敷きにしているときしか出せない
-  var SVLKEY = "sv-svline";
-  var svLine = lsGet(SVLKEY) === "1";
-
-  function setSvLine(on) {
-    svLine = !!on;
-    lsSet(SVLKEY, svLine ? "1" : "0");
-    var c = $("svchk");
-    if (c) c.checked = svLine;
-    applySvLine();
-  }
-
-  function applySvLine() {
-    var g = fastLayer.groad;
-    if (!g || !g.addGoogleLayer) return;
-    try {
-      if (svLine) g.addGoogleLayer("StreetViewCoverageLayer");
-      else g.removeGoogleLayer("StreetViewCoverageLayer");
-    } catch (e) { /* 古いブラウザなどで失敗しても地図自体は動かす */ }
-  }
 
   // 徒歩道・階段の種別コード。地理院の地図でも破線や細い1本線で描かれ、
   // 道幅のデータを持たない。車で通れないので帯では描かない
@@ -1007,6 +984,10 @@
       preferCanvas: true             // 道を何百本も描くのでキャンバスのほうが速い
     });
     // 現在地の印は道より上に出したいので、専用の層を作る
+    // ストリートビューの青線は、背景の上・赤い道の下に置く
+    map.createPane("svPane");
+    map.getPane("svPane").style.zIndex = 250;
+    map.getPane("svPane").style.pointerEvents = "none";
     map.createPane("mePane");
     map.getPane("mePane").style.zIndex = 650;
     map.getPane("mePane").style.pointerEvents = "none";
@@ -1055,8 +1036,8 @@
       setBase(i < 0 ? QUICK_N[0] : QUICK_N[(i + 1) % QUICK_N.length]);
     });
     $("fbase").addEventListener("change", function () { setBase(this.value); });
-    setSvLine(svLine);
-    $("svchk").addEventListener("change", function () { setSvLine(this.checked); });
+    $("svchk").addEventListener("change", function () { setSvLine(this.checked, true); });
+    setSvLine(lsGet(SVKEY) === "1", false);
     buildBlankUI();
     $("blankAll").addEventListener("click", function () { setAllBlank(null); });
     $("blankMin").addEventListener("click", function () {
@@ -1368,6 +1349,7 @@
       dropPlain();
       ensureFast(k);
       showOnlyFast(k);
+      applySvLine();
       return;
     }
     dropFast();
@@ -1409,6 +1391,7 @@
     baseLayer = lyr;
     baseLayer.addTo(map);
     if (baseLayer.bringToBack) baseLayer.bringToBack();
+    applySvLine();
   }
 
   // ---------- Googleと白地図の素早い切り替え ----------
@@ -1426,8 +1409,8 @@
         fastLayer.groad = L.gridLayer.googleMutant({ type: BASES.groad.gtype, maxZoom: 21 });
         fastLayer.groad.addTo(map);
         fastLayer.groad.bringToBack();
-        applySvLine();
         showOnlyFast(baseKey);
+        applySvLine();
       }).catch(function (e) {
         onGoogleFail(String(e && e.message || e));
       });
@@ -1478,8 +1461,10 @@
     // Googleのロゴと著作権表示は、Googleを見せているときだけ出す
     var g = fastLayer.groad;
     if (g) {
+      // 青線を重ねているときもGoogleの中身を見せているので、出典は出しておく
+      var showCred = (k === "groad") || svOn;
       [g._logoContainer, g._attributionContainer].forEach(function (el) {
-        if (el) el.style.display = (k === "groad") ? "" : "none";
+        if (el) el.style.display = showCred ? "" : "none";
       });
     }
     baseLayer = fastLayer[k] && fastLayer[k] !== "loading" ? fastLayer[k] : baseLayer;
@@ -1504,6 +1489,194 @@
   function baseKeyOf(l) {
     for (var i = 0; i < FAST.length; i++) if (fastLayer[FAST[i]] === l) return FAST[i];
     return "";
+  }
+
+  // ---------- ストリートビューのある道（青線） ----------
+  // Googleの「ストリートビューの範囲」は、背景の地図タイルとまったく同じ
+  // 入れ物に画像として流れてくる。両方を同じ層に入れると取り合いになって
+  // 背景が出なくなるので、画像の素性（src の !2ssvv!）で振り分ける。
+  var SVV_RE = /!2ssvv!/;
+  var GM_XYZ = /!1i(\d+)!2i(\d+)!3i(\d+)!/;
+
+  // 背景の層には青線のタイルを渡さない。これをしないと、動かすたびに
+  // 背景が青線に置き換わってしまう（以前の不具合の原因）
+  (function () {
+    var C = L.GridLayer && L.GridLayer.GoogleMutant;
+    if (!C || C.prototype.__svSplit) return;
+    var orig = C.prototype._onMutatedImage;
+    C.prototype._onMutatedImage = function (img) {
+      if (img && img.src && SVV_RE.test(img.src)) return;
+      return orig.call(this, img);
+    };
+    C.prototype.__svSplit = true;
+  })();
+
+  // 青線だけを拾って並べる層。自分でGoogleの地図を作らないので料金は増えない
+  var SvCover = L.GridLayer.extend({
+    options: { pane: "svPane", minZoom: 5, maxZoom: 21, maxNativeZoom: 21 },
+
+    initialize: function (opts) {
+      L.GridLayer.prototype.initialize.call(this, opts);
+      this._have = {};    // タイル鍵 → 届いた画像
+      this._ord = [];     // 古い順。増えすぎたら捨てる
+      this._want = {};    // タイル鍵 → 待っている人
+    },
+
+    setHost: function (h) { this._host = h; return this; },
+
+    // Googleがその場所で持っている最大の細かさに合わせる。ずれると青線が出なくなる
+    _update: function (center) {
+      var h = this._host;
+      if (h && h.options && h.options.maxNativeZoom &&
+          h.options.maxNativeZoom !== this.options.maxNativeZoom) {
+        this.options.maxNativeZoom = h.options.maxNativeZoom;
+      }
+      L.GridLayer.prototype._update.call(this, center);
+    },
+
+    onAdd: function (map) {
+      L.GridLayer.prototype.onAdd.call(this, map);
+      this.listen();
+    },
+
+    onRemove: function (map) {
+      if (this._obs) { this._obs.disconnect(); this._obs = null; }
+      this._have = {}; this._ord = []; this._want = {};
+      L.GridLayer.prototype.onRemove.call(this, map);
+    },
+
+    // 背景の層の入れ物を見張る。まだ出来ていなければ少し待って出直す
+    listen: function () {
+      var self = this, h = this._host;
+      if (!h || !this._map) return;
+      var root = h._mutantContainer;
+      if (!root) { setTimeout(function () { self.listen(); }, 300); return; }
+      if (this._root === root && this._obs) { this._sweep(root); return; }
+      if (this._obs) this._obs.disconnect();
+      this._root = root;
+      this._obs = new MutationObserver(function (ms) {
+        for (var i = 0; i < ms.length; i++) {
+          var a = ms[i].addedNodes;
+          for (var j = 0; j < a.length; j++) {
+            var n = a[j];
+            if (n instanceof HTMLImageElement) self._got(n);
+            else if (n instanceof HTMLElement && n.querySelectorAll) self._sweep(n);
+          }
+        }
+      });
+      this._obs.observe(root, { childList: true, subtree: true });
+      this._sweep(root);
+    },
+
+    _sweep: function (node) {
+      var l = node.querySelectorAll("img");
+      for (var i = 0; i < l.length; i++) this._got(l[i]);
+    },
+
+    _got: function (img) {
+      if (!img || !img.src || !SVV_RE.test(img.src)) return;
+      var m = img.src.match(GM_XYZ);
+      if (!m) return;
+      var key = this._tileCoordsToKey({ x: m[2], y: m[3], z: m[1] });
+      if (!this._have[key]) this._ord.push(key);
+      this._have[key] = img;
+      while (this._ord.length > 300) delete this._have[this._ord.shift()];
+      var w = this._want[key];
+      if (w) {
+        delete this._want[key];
+        for (var i = 0; i < w.length; i++) w[i](img);
+      }
+    },
+
+    _copy: function (img) {
+      var c = img.cloneNode(true);
+      c.style.position = "absolute";
+      c.style.left = "0";
+      c.style.top = "0";
+      c.style.visibility = "visible";
+      return c;
+    },
+
+    createTile: function (coords, done) {
+      var self = this, key = this._tileCoordsToKey(coords);
+      var box = L.DomUtil.create("div"), fired = false;
+      box.style.textAlign = "left";
+      function finish(img) {
+        if (fired) return;
+        fired = true;
+        if (img) box.appendChild(self._copy(img));
+        done(null, box);
+      }
+      var got = this._have[key];
+      if (got) {
+        L.Util.requestAnimFrame(function () { finish(got); });
+      } else {
+        (this._want[key] = this._want[key] || []).push(finish);
+        // 届かないままだとLeafletが古いタイルを片付けられないので保険をかける
+        setTimeout(function () { finish(null); }, 6000);
+      }
+      return box;
+    }
+  });
+
+  var svOn = false, svLayer = null;
+
+  // 青線のもとになるGoogleの地図（2枚組のGoogle、または単独のGoogle背景）
+  function svHost() {
+    var g = fastLayer.groad;
+    if (g && g !== "loading" && map.hasLayer(g)) return g;
+    if (baseLayer && baseLayer._mutantContainer && map.hasLayer(baseLayer)) return baseLayer;
+    return null;
+  }
+
+  function svNote(msg) {
+    var p = $("svNote");
+    if (!p) return;
+    p.textContent = msg || "";
+    p.hidden = !msg;
+  }
+
+  function dropSv() {
+    if (!svLayer) return;
+    if (svLayer._host && svLayer._host.removeGoogleLayer) {
+      try { svLayer._host.removeGoogleLayer("StreetViewCoverageLayer"); } catch (e) { /* ignore */ }
+    }
+    if (map.hasLayer(svLayer)) { try { map.removeLayer(svLayer); } catch (e) { /* ignore */ } }
+  }
+
+  function applySvLine() {
+    if (!map) return;
+    if (!svOn) { dropSv(); svNote(""); return; }
+    if (!gKey() || gFailMsg) {
+      dropSv();
+      svNote("Googleのキーが必要です。下の欄にキーを入れてください。");
+      return;
+    }
+    var host = svHost();
+    if (!host) {
+      dropSv();
+      svNote("この背景では出せません。Googleマップ（地図・航空・地形）か、地理院の白地図にしてください。");
+      return;
+    }
+    svNote("");
+    if (svLayer && svLayer._host && svLayer._host !== host) { dropSv(); svLayer = null; }
+    if (!svLayer) svLayer = new SvCover();
+    svLayer.setHost(host);
+    // 二重に足すと古いほうが残って無駄にタイルを取り続けるので一度だけ
+    if (!(host._subLayers && host._subLayers.StreetViewCoverageLayer)) {
+      try { host.addGoogleLayer("StreetViewCoverageLayer"); } catch (e) { /* ignore */ }
+    }
+    if (!map.hasLayer(svLayer)) svLayer.addTo(map);
+    else svLayer.listen();
+  }
+
+  function setSvLine(on, byUser) {
+    svOn = !!on;
+    var c = $("svchk");
+    if (c) c.checked = svOn;
+    if (byUser) lsSet(SVKEY, svOn ? "1" : "0");
+    applySvLine();
+    if (map && FAST.indexOf(baseKey) >= 0) showOnlyFast(baseKey);
   }
 
   function applyBaseUI(k, def, note) {
